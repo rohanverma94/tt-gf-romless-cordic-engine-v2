@@ -17,7 +17,9 @@
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
-  "CLOCK_PERIOD": 20,
+  "//": "tt_um_xcordic on gf180mcuD at 3.3 V: 40 ns (25 MHz) closes the slow corner (ss_125C_3v00)",
+  "//": "before layout with the 20-bit GUARD = 4 datapath (tools/sta.sh); the typical corner has ~20 ns to spare.",
+  "CLOCK_PERIOD": 40,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
