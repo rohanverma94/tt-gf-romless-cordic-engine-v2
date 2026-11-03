@@ -1,0 +1,82 @@
+// xcordic_atan.v — ROM-less micro-angle generator, three modes
+//
+// Generalizes dynamic_atan.v from ttsky-romless-cordic-engine. Same hybrid
+// scheme, now one function of (mode, iteration) instead of a lockstep FSM.
+// Values have F = DATA_WIDTH - 4 fraction bits (S3.F).
+//
+//   circular   s = 0      atan0 register   (in_atan_0 on ttsky25a)
+//              s = 1      atan1 register   (the Taylor term is 19 codes short
+//                                           here; 0x0758 reproduces silicon)
+//              s >= 2     2^-s - x^3/3 (+ x^5/5 when GUARD > 0)
+//   hyperbolic s = 1      atanh1 register
+//              s >= 2     2^-s + x^3/3 (+ x^5/5 when GUARD > 0)
+//              sequence   1,2,3,4,4,5,...   repeat at 4, and at 13 when N_PE >= 14
+//   linear     s          2^-s
+//
+// GUARD = 0 (ttsky25a): x^3/3 = 2^-3s (1/4 + 1/16 + 1/64), truncated at F bits.
+//   For s >= 5 the cube term shifts out, so this is the silicon table exactly.
+// GUARD > 0: the series is formed at F+4 bits with 1/3 ~ 1/4+1/16+1/64+1/256+1/1024
+//   and 1/5 ~ 1/8+1/16+1/128+1/256 (x^5 <= 2^-10, so finer terms shift out),
+//   then rounded to F bits (worst table error ~1 LSB of F bits, see
+//   toolchain/gen_consts.cpp).
+`timescale 1ns/1ps
+`default_nettype none
+
+module xcordic_atan #(
+    parameter DATA_WIDTH = 16,
+    parameter N_PE = 13,
+    parameter GUARD = 0
+)(
+    input  wire [1:0]                   i_mode,     // 0 circ, 1 lin, 2 hyp
+    input  wire [4:0]                   i_iter,
+    input  wire [DATA_WIDTH-1:0]        i_atan0,
+    input  wire [DATA_WIDTH-1:0]        i_atan1,
+    input  wire [DATA_WIDTH-1:0]        i_atanh1,
+    output wire [4:0]                   o_shift,
+    output reg  [DATA_WIDTH-1:0]        o_angle
+);
+    localparam [1:0] M_CIRC = 2'd0, M_LIN = 2'd1, M_HYP = 2'd2;
+    localparam integer F  = DATA_WIDTH - 4;
+    localparam integer X  = (GUARD > 0) ? 4 : 0;        // extra internal fraction bits
+    localparam integer IW = DATA_WIDTH + X;
+    localparam REP13 = (N_PE >= 14);
+
+    // hyperbolic: shift = iter + 1, minus one after each repeated stage (4, 13)
+    wire [4:0] s_hyp = i_iter + 5'd1 - {4'd0, (i_iter >= 5'd4)}
+                                     - {4'd0, (REP13 && i_iter >= 5'd14)};
+    assign o_shift = (i_mode == M_HYP) ? s_hyp : i_iter;
+
+    wire [DATA_WIDTH-1:0] one_f = {{(DATA_WIDTH-1){1'b0}}, 1'b1} << F;
+    wire [IW-1:0]         one_i = {{(IW-1){1'b0}}, 1'b1} << (F + X);
+    wire [IW-1:0]         p1    = one_i >> o_shift;
+    wire [IW-1:0]         p3    = one_i >> (3 * o_shift);
+    wire [IW-1:0]         p5    = one_i >> (5 * o_shift);
+    wire [IW-1:0]         third = (GUARD > 0)
+        ? (p3 >> 2) + (p3 >> 4) + (p3 >> 6) + (p3 >> 8) + (p3 >> 10)
+        : (p3 >> 2) + (p3 >> 4) + (p3 >> 6);
+    wire [IW-1:0]         fifth = (GUARD > 0)
+        ? (p5 >> 3) + (p5 >> 4) + (p5 >> 7) + (p5 >> 8)
+        : {IW{1'b0}};
+    wire [IW-1:0]         t_circ = p1 - third + fifth;
+    wire [IW-1:0]         t_hyp  = p1 + third + fifth;
+    wire [IW-1:0]         r_bias = (X > 0) ? ({{(IW-1){1'b0}}, 1'b1} << (X - 1)) : {IW{1'b0}};
+    wire [IW-1:0]         a_circ = (t_circ + r_bias) >> X;
+    wire [IW-1:0]         a_hyp  = (t_hyp + r_bias) >> X;
+
+    always @* begin
+        case (i_mode)
+            M_LIN: o_angle = one_f >> o_shift;
+            M_HYP: begin
+                if (o_shift == 5'd1)      o_angle = i_atanh1;
+                else                      o_angle = a_hyp[DATA_WIDTH-1:0];
+            end
+            default: begin
+                if (o_shift == 5'd0)      o_angle = i_atan0;
+                else if (o_shift == 5'd1) o_angle = i_atan1;
+                else                      o_angle = a_circ[DATA_WIDTH-1:0];
+            end
+        endcase
+    end
+endmodule
+
+`default_nettype wire

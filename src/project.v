@@ -1,27 +1,81 @@
-/*
- * Copyright (c) 2024 Your Name
- * SPDX-License-Identifier: Apache-2.0
- */
-
+// tt_um_xcordic — standalone Xcordic: all 20 Xcordic instructions behind SPI,
+// with a legacy mode pin-compatible with tt_um_romless_cordic_engine (ttsky25a).
+//
+//   ui[0] SCLK     ui[1] MOSI     ui[2] CS_N    (as ttsky25a)
+//   ui[3] PROTO    0: legacy 8-byte in / 6-byte out frame   1: command frames
+//   ui[4] CPHA     0: SPI mode 0 (as ttsky25a)              1: SPI mode 1
+//   uo[0] MISO     uo[1] DATA_READY (as ttsky25a)           uo[2] BUSY
+//
+// SPI_SCLK = 0: oversampled SPI slave (xc_spi_slave), SCLK up to clk/4.
+// SPI_SCLK = 1: SCLK-domain shift registers (xc_spi_slave_sclk), e.g. 66.7 MHz
+//               SCLK at a 100 MHz clk; needs SCLK as a clock in the flow (sta.sdc).
+// GUARD = 0: the ttsky25a 16-bit datapath (bit-exact for rot/sincos with the
+// silicon when atan1 = 0x0758); GUARD = 4: 20-bit datapath, ~1 LSB.
+// See docs/info.md for the protocols.
+`timescale 1ns/1ps
 `default_nettype none
 
-module tt_um_example (
-    input  wire [7:0] ui_in,    // Dedicated inputs
-    output wire [7:0] uo_out,   // Dedicated outputs
-    input  wire [7:0] uio_in,   // IOs: Input path
-    output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered, so you can ignore it
-    input  wire       clk,      // clock
-    input  wire       rst_n     // reset_n - low to reset
+module tt_um_xcordic #(
+    parameter FUNCS = 1,
+    parameter GUARD = 4,
+    parameter TIMEOUT_LOG2 = 24,
+    parameter SPI_SCLK = 0
+)(
+    input  wire [7:0] ui_in,
+    output wire [7:0] uo_out,
+    input  wire [7:0] uio_in,
+    output wire [7:0] uio_out,
+    output wire [7:0] uio_oe,
+    input  wire       ena,
+    input  wire       clk,
+    input  wire       rst_n
 );
+    assign uio_out = 8'd0;
+    assign uio_oe  = 8'd0;
+    wire _unused = &{ena, uio_in, ui_in[7:5], 1'b0};
 
-  // All output pins must be assigned. If not used, assign to 0.
-  assign uo_out  = ui_in + uio_in;  // Example: ou_out is the sum of ui_in and uio_in
-  assign uio_out = 0;
-  assign uio_oe  = 0;
+    wire       miso, data_ready, busy;
+    wire [7:0] rx_data, tx_data, tx_next;
+    wire       rx_valid, cs_on, frame_start, frame_end;
 
-  // List all unused inputs to prevent warnings
-  wire _unused = &{ena, clk, rst_n, 1'b0};
+    generate if (SPI_SCLK) begin : g_spi
+        xc_spi_slave_sclk spi (
+            .clk(clk), .rst_n(rst_n), .cpha(ui_in[4]),
+            .sclk(ui_in[0]), .mosi(ui_in[1]), .miso(miso), .cs_n(ui_in[2]),
+            .tx_data(tx_data), .tx_next(tx_next), .rx_data(rx_data), .rx_valid(rx_valid),
+            .cs_on(cs_on), .frame_start(frame_start), .frame_end(frame_end)
+        );
+    end else begin : g_spi
+        xc_spi_slave spi (
+            .clk(clk), .rst_n(rst_n), .cpha(ui_in[4]),
+            .sclk(ui_in[0]), .mosi(ui_in[1]), .miso(miso), .cs_n(ui_in[2]),
+            .tx_data(tx_data), .tx_next(tx_next), .rx_data(rx_data), .rx_valid(rx_valid),
+            .cs_on(cs_on), .frame_start(frame_start), .frame_end(frame_end)
+        );
+    end endgenerate
 
+    wire        c_start, c_busy, c_done;
+    wire [6:0]  c_funct7;
+    wire [2:0]  c_funct3;
+    wire [31:0] c_rs1, c_rs2, c_rd;
+
+    xc_frame #(.FUNCS(FUNCS), .GUARD(GUARD), .TIMEOUT_LOG2(TIMEOUT_LOG2)) frame (
+        .clk(clk), .rst_n(rst_n), .proto_pin(ui_in[3]),
+        .rx_data(rx_data), .rx_valid(rx_valid), .cs_on(cs_on),
+        .frame_start(frame_start), .frame_end(frame_end),
+        .tx_data(tx_data), .tx_next(tx_next),
+        .c_start(c_start), .c_funct7(c_funct7), .c_funct3(c_funct3),
+        .c_rs1(c_rs1), .c_rs2(c_rs2), .c_busy(c_busy), .c_done(c_done), .c_rd(c_rd),
+        .data_ready(data_ready), .busy(busy)
+    );
+
+    xcordic_core #(.FUNCS(FUNCS), .GUARD(GUARD)) core (
+        .clk(clk), .rstn(rst_n), .start(c_start),
+        .funct7(c_funct7), .funct3(c_funct3), .rs1(c_rs1), .rs2(c_rs2),
+        .busy(c_busy), .done(c_done), .rd(c_rd)
+    );
+
+    assign uo_out = {5'd0, busy, data_ready, miso};
 endmodule
+
+`default_nettype wire
