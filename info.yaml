@@ -1,9 +1,9 @@
 # Tiny Tapeout project information
 project:
-  title:        "Xcordic: verified CORDIC function unit"
+  title:        "Xcordic: ROM-Less CORDIC function unit"
   author:       "Rohan Verma"
   discord:      "always_ff_rohan"
-  description:  "Computes sin, cos, tan, atan2, hypot, exp, ln, sqrt, mul, div, tanh and CORDIC passes over SPI; ROM-less, formally verified, legacy-compatible with tt_um_romless_cordic_engine"
+  description:  "Computes sin, cos, tan, atan2, hypot, exp, ln, sqrt, mul, div, tanh over SPI. It's ROM-less and formally verified, a successor to tt_um_romless_cordic_engine on TTSKY25A"
   language:     "Verilog"
   clock_hz:     25000000
 
@@ -11,7 +11,7 @@ project:
   # (the defaults in src/project.v): ~230k um^2 of cells before placement
   # (tools/sta.sh). 4x2 = 1440 x 325 um (469k um^2), ~49 % before buffering and CTS;
   # 3x2 (350k um^2) would be ~66 %, above the 60 % density target.
-  tiles: "4x2"
+  tiles: "3x4"
 
   top_module:  "tt_um_xcordic"
 
