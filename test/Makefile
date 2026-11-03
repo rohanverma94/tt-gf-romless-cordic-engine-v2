@@ -6,9 +6,19 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v
+PROJECT_SOURCES = project.v xc_spi_slave.v xc_spi_slave_sclk.v xc_meta.v xc_frame.v xcordic_core.v xcordic_engine.v xcordic_atan.v
 
-ifneq ($(GATES),yes)
+ifeq ($(GATES),pre)
+
+# Pre-layout gate level (test/gl.sh): a Yosys gf180mcu netlist from
+# tools/sta.sh, no power pins. NETLIST= the netlist, CELLS= the cell models.
+SIM_BUILD				= sim_build/gl_pre
+COMPILE_ARGS    += -DFUNCTIONAL
+COMPILE_ARGS    += -DSIM
+COMPILE_ARGS    += -DUNIT_DELAY=\#1
+VERILOG_SOURCES += $(CELLS) $(NETLIST)
+
+else ifneq ($(GATES),yes)
 
 # RTL simulation:
 SIM_BUILD				= sim_build/rtl
