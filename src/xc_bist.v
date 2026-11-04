@@ -1,6 +1,6 @@
 // xc_bist.v — built-in self-test between the instruction source and the core.
 //
-// v0.9. Transparent for every instruction except op 20 (funct7 = 2,
+// Transparent for every instruction except op 20 (funct7 = 2,
 // funct3 = 4), cordic.bist:
 //   rs1[15:0] = N, the number of instructions to run (0..65535)
 //   rs2       = LFSR seed (0 is replaced by 1)
