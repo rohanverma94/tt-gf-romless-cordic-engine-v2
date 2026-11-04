@@ -22,10 +22,10 @@ project:
     - "xc_meta.v"
     - "xc_frame.v"
     - "xc_bist.v"
+    - "xc_exact.v"
     - "xcordic_core.v"
     - "xcordic_engine.v"
     - "xcordic_atan.v"
-    
 pinout:
   # Inputs
   ui[0]: "SCLK"
