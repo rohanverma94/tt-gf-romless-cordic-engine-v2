@@ -1,6 +1,6 @@
 ## How it works
 
-Xcordic is a ROM-less CORDIC function unit behind an SPI slave. It is the corrected successor of `tt_um_romless_cordic_engine` (ttsky25a), and every part of it is formally verified. This is the build for the Tiny Tapeout GF26c shuttle (GlobalFoundries gf180mcuD, 3.3 V, 25 MHz); the RTL is identical to the sky130 build.
+Xcordic is a ROM-less CORDIC function unit behind an SPI slave. It is the corrected successor of `tt_um_romless_cordic_engine` (ttsky25a), and every part of it is formally verified. This is the build for the Tiny Tapeout GF26c shuttle (GlobalFoundries gf180mcuD, 3.3 V, 25 MHz).
 
 - **One engine, many functions:** a single iterative CORDIC engine runs circular, linear and hyperbolic passes. A sequencer adds range reduction, so each function covers its full S3.12 domain in one instruction:
   - sin, cos, tan
@@ -18,7 +18,7 @@ Xcordic is a ROM-less CORDIC function unit behind an SPI slave. It is the correc
   |---|---|---|---|---|---|---|---|---|---|
   | 1.18 | 1.16 | 1.18 | 1.35 / 0.81 | 4.89 / 1.10 | 0.80 | 1.07 | 2.46 / 0.81 | **0.5** (exact) | 4.45 / 1.13 |
 
-  Mean errors are 0.19–0.37 LSB. tan is accurate except near its poles (5.6 LSB relative). Large absolute errors only occur on large results (|result| > 2); relative to the result every function except tan is within 1.2 LSB. mul (v0.9) uses a hardware 16 × 16 multiplier: the product rounded half up and saturated, so |error| ≤ 0.5 LSB, at any GUARD (CORDIC mul was 1.36 / 0.64 LSB). mac keeps its rounded CORDIC product pass (v0.8). `GUARD = 0` (the ttsky25a datapath, unchanged) is about ten times worse: div 64 / 10.5, sin 8.8 LSB.
+  Mean errors are 0.19–0.37 LSB. tan is accurate except near its poles (5.6 LSB relative). Large absolute errors only occur on large results (|result| > 2); relative to the result every function except tan is within 1.2 LSB. mul (v0.9) uses a hardware 16 × 16 multiplier: the product rounded half up and saturated, so |error| ≤ 0.5 LSB, at any GUARD (CORDIC mul was 1.36 / 0.64 LSB). mac keeps its rounded CORDIC product pass. `GUARD = 0` (the ttsky25a datapath, unchanged) is about ten times worse: div 64 / 10.5, sin 8.8 LSB.
 
 ### Pins
 
@@ -123,9 +123,9 @@ The ttsky25a slave needed, in mode 0, SCLK high ≥ 4, low ≥ 5 and CS setup �
 | SPI_SCLK = 0 (default) | 343k µm² | +17.2 ns | −4.8 ns |
 | SPI_SCLK = 1 | 347k µm² | +17.5 ns | −4.2 ns |
 
-- **The typical corner sets the practical clock; the slow corner (125 °C, 3.0 V) does not close 25 MHz.** The v0.8 layout at 3×4 tiles signed off at +14.5 ns typical and −10.4 ns slow (about 20 MHz at the slow corner); expect v0.9 to be similar.
+- **The typical corner sets the practical clock; the slow corner (125 °C, 3.0 V) does not close 25 MHz.** The layout at 3×4 tiles signed off at +14.5 ns typical and −10.4 ns slow (about 20 MHz at the slow corner).
 - **On the bench at room temperature** the chip will likely run well above 25 MHz; the harness's `fclk` setting and `shmoo` find the real limit.
-- **Area:** 3×4 tiles (1076 × 737 µm, 793k µm²). The cells fill about 43 % before buffering and clock tree (v0.8: 29 %, which the flow reported as 33 %). 4×2 failed to route with v0.8: the barrel shifters are wire-heavy and gf180mcu routes on Metal1–4 only.
+- **Area:** 3×4 tiles (1076 × 737 µm, 793k µm²). 
 - **Check after hardening:** run `NETLIST=<final netlist> SPEF=<spef> tools/sta.sh` on the GDS action's results.
 
 ## How to test
