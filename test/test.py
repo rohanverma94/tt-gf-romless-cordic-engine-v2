@@ -91,15 +91,18 @@ async def test_xcordic(dut):
     set_pin(dut, 3, 1)
     await ClockCycles(dut.clk, 10)
 
+    flags = [0]                         # FLAGS byte of the last result (v1.0): bit 0 SAT, bit 1 INV
+
     async def run(op, a, b=None):
         f7, f3 = op
         cmd = 0x80 | (f7 << 3) | f3
         tx = [cmd] + list(a.to_bytes(4, "little")) + ([] if b is None else list(b.to_bytes(4, "little")))
         await frame(dut, tx)
         await wait_ready(dut)
-        rx = await frame(dut, [0] * 5)
+        rx = await frame(dut, [0] * 6)     # STATUS, RD, FLAGS
         status = rx[0]
         assert status & 0b111 == 0b010, f"status {status:02x}"
+        flags[0] = rx[5]
         return rx[1] | rx[2] << 8 | rx[3] << 16 | rx[4] << 24
 
     x = 0.7
@@ -107,13 +110,19 @@ async def test_xcordic(dut):
     close(await run((1, 1), q12(x)), math.cos(x), "cos")
     close(await run((1, 5), q12(1.5)), math.exp(1.5), "exp", tol=6)   # rel <= 1.1 LSB at 4.48
     close(await run((1, 6), q12(3.0)), math.log(3.0), "ln")
-    close(await run((1, 7), q12(5.0)), math.sqrt(5.0), "sqrt")
+    close(await run((1, 7), q12(5.0)), math.sqrt(5.0), "sqrt", tol=0.5)          # v1.0: exact
     close(await run((1, 3), q12(0.6), q12(-0.8)), math.atan2(0.6, -0.8), "atan2")
-    close(await run((2, 0), q12(1.25), q12(-2.5)), 1.25 * -2.5, "mul", tol=0)
-    close(await run((2, 1), q12(1.0), q12(3.0)), 1 / 3, "div")
+    close(await run((2, 0), q12(1.25), q12(-2.5)), 1.25 * -2.5, "mul", tol=0)    # v0.9: exact
+    close(await run((2, 1), q12(1.0), q12(3.0)), 1 / 3, "div", tol=0.5)       # v1.0: exact
+    assert flags[0] == 0, f"div flags {flags[0]}"
+    # v1.0 flags: SAT when a result is clipped, INV for an invalid argument
+    assert await run((2, 0), q12(7.0), q12(2.0)) == 0x7FFF and flags[0] == 1, "mul 7 * 2: SAT"
+    assert await run((2, 1), q12(1.0), 0) == 0x7FFF and flags[0] == 2, "div by 0: INV"
+    assert await run((1, 7), 0xFFFF) == 0xFFFF8000 and flags[0] == 2, "sqrt of < 0: INV"
+    assert await run((2, 1), q12(-4.0) & 0xFFFF, q12(0.5)) == 0xFFFF8000 and flags[0] == 0, "-4 / 0.5 = -8: not clipped"
     close(await run((2, 2), q12(-0.75)), math.tanh(-0.75), "tanh")
     # cordic.bist: 25 instructions from seed 0x12345678; the signature is the
     # golden model's (host/pico_harness/xc_model.hpp, GUARD = 4, cfg at reset)
     sig = await run((2, 4), 25, 0x12345678)
-    assert sig == 0x52BB2160, f"bist signature {sig:08x}"
+    assert sig == 0x1BA9615E, f"bist signature {sig:08x}"     # v1.0 (flags in the signature)
     dut._log.info("legacy and command protocol: all results within tolerance, bist signature OK")

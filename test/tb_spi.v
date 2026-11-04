@@ -74,19 +74,20 @@ module tb_spi;
 
     // ---------------- reference core ----------------
     reg r_start = 0; reg [6:0] r_f7; reg [2:0] r_f3; reg [31:0] r_rs1, r_rs2;
-    wire r_busy, r_done; wire [31:0] r_rd;
+    wire r_busy, r_done; wire [31:0] r_rd; wire [1:0] r_flags;
+    reg [1:0] r_flg;                         // flags of the last ref_exec (v1.0)
 `ifdef ORIG
     xcordic_core #(.GUARD(RG)) ref_core (.clk(clk), .rstn(rst_n), .start(r_start), .funct7(r_f7),
-        .funct3(r_f3), .rs1(r_rs1), .rs2(r_rs2), .busy(r_busy), .done(r_done), .rd(r_rd));
+        .funct3(r_f3), .rs1(r_rs1), .rs2(r_rs2), .busy(r_busy), .done(r_done), .rd(r_rd), .flags(r_flags));
 `else
     // reference: a separate self-test unit + core (v0.9), so cordic.bist has a reference too
-    wire rc_start, rc_busy, rc_done; wire [6:0] rc_f7; wire [2:0] rc_f3; wire [31:0] rc_rs1, rc_rs2, rc_rd;
+    wire rc_start, rc_busy, rc_done; wire [6:0] rc_f7; wire [2:0] rc_f3; wire [31:0] rc_rs1, rc_rs2, rc_rd; wire [1:0] rc_flags;
     xc_bist ref_bist (.clk(clk), .rst_n(rst_n), .u_start(r_start), .u_funct7(r_f7), .u_funct3(r_f3),
-        .u_rs1(r_rs1), .u_rs2(r_rs2), .u_busy(r_busy), .u_done(r_done), .u_rd(r_rd),
+        .u_rs1(r_rs1), .u_rs2(r_rs2), .u_busy(r_busy), .u_done(r_done), .u_rd(r_rd), .u_flags(r_flags),
         .c_start(rc_start), .c_funct7(rc_f7), .c_funct3(rc_f3), .c_rs1(rc_rs1), .c_rs2(rc_rs2),
-        .c_busy(rc_busy), .c_done(rc_done), .c_rd(rc_rd));
+        .c_busy(rc_busy), .c_done(rc_done), .c_rd(rc_rd), .c_flags(rc_flags));
     xcordic_core #(.GUARD(RG)) ref_core (.clk(clk), .rstn(rst_n), .start(rc_start), .funct7(rc_f7),
-        .funct3(rc_f3), .rs1(rc_rs1), .rs2(rc_rs2), .busy(rc_busy), .done(rc_done), .rd(rc_rd));
+        .funct3(rc_f3), .rs1(rc_rs1), .rs2(rc_rs2), .busy(rc_busy), .done(rc_done), .rd(rc_rd), .flags(rc_flags));
 `endif
     task ref_exec(input [6:0] f7, input [2:0] f3, input [31:0] a, input [31:0] b, output [31:0] rd);
         begin
@@ -94,6 +95,7 @@ module tb_spi;
             @(negedge clk); r_start = 0;
             while (!r_done) @(negedge clk);
             rd = r_rd;
+            r_flg = r_flags;
         end
     endtask
 
@@ -177,6 +179,22 @@ module tb_spi;
             txb[0] = c0; {txb[4], txb[3], txb[2], txb[1]} = a; {txb[8], txb[7], txb[6], txb[5]} = b;
             frame(n);
             status = rxb[0]; rd = {rxb[4], rxb[3], rxb[2], rxb[1]};
+        end
+    endtask
+    // v1.0: one instruction, then check RD and the FLAGS byte against fixed values
+    task dchk(input [7:0] c0, input [31:0] a, input [31:0] b, input [31:0] want_rd, input [1:0] want_fl);
+        reg [7:0] st_;
+        reg [31:0] rd_;
+        begin
+            cmd(c0, a, b, 9, st_, rd_);
+            wait_idle;
+            cmd(8'h00, 0, 0, 6, st_, rd_);
+            checks = checks + 1;
+            if (rd_ !== want_rd || rxb[5] !== {6'd0, want_fl}) begin
+                errors = errors + 1;
+                $display("  exact op %02h a %08h b %08h: got %08h flags %02h, want %08h flags %0d",
+                         c0, a, b, rd_, rxb[5], want_rd, want_fl);
+            end
         end
     endtask
     task wait_idle;
@@ -272,13 +290,13 @@ module tb_spi;
                 if (len == 5) b = 0;
                 cmd({1'b1, 2'b00, op[4:0]}, a, b, len, st, rd);
                 wait_idle;
-                cmd(8'h00, 0, 0, 5, st, rd);                 // read STATUS + RD
+                cmd(8'h00, 0, 0, 6, st, rd);                 // read STATUS + RD + FLAGS (v1.0)
                 ref_exec(op[4:3], op[2:0], a, b, want);
                 checks = checks + 1;
-                if (rd !== want || st[2] || !st[1] || st[0]) begin
+                if (rd !== want || st[2] || !st[1] || st[0] || rxb[5] !== {6'd0, r_flg}) begin
                     errors = errors + 1;
-                    if (errors - e0 <= 5) $display("  cmd op %0d rs1 %08h rs2 %08h: got %08h status %02h, want %08h",
-                                                  op, a, b, rd, st, want);
+                    if (errors - e0 <= 5) $display("  cmd op %0d rs1 %08h rs2 %08h: got %08h status %02h flags %02h, want %08h flags %0d",
+                                                  op, a, b, rd, st, rxb[5], want, r_flg);
                 end
             end
             $display("command: %0d instructions, %0d errors", ncmd, errors - e0);
@@ -298,6 +316,24 @@ module tb_spi;
             ref_exec(1, 1, 32'h0800, 0, want);
             if (rd !== want) begin errors = errors + 1; $display("  pipelined exec wrong"); end
             $display("command error/status cases: %0s", errors == e0 ? "OK" : "FAILED");
+            // v1.0: exact mul / div / sqrt and the FLAGS byte, values worked out by hand
+            e0 = errors;
+            dchk(8'h90, 32'h1000, 32'h1000, 32'h00001000, 2'b00);   // 1 * 1 = 1
+            dchk(8'h90, 32'h7000, 32'h2000, 32'h00007FFF, 2'b01);   // 7 * 2 = 14: SAT
+            dchk(8'h90, 32'hFFFF, 32'h0800, 32'h00000000, 2'b00);   // -1 LSB * 0.5 = -0.5 LSB: ties up -> 0
+            dchk(8'h90, 32'h0001, 32'h0800, 32'h00000001, 2'b00);   // +0.5 LSB -> 1
+            dchk(8'h91, 32'h1000, 32'h3000, 32'h00000555, 2'b00);   // 1/3 = 1365.33 LSB
+            dchk(8'h91, 32'hF000, 32'h3000, 32'hFFFFFAAB, 2'b00);   // -1/3 -> -1365
+            dchk(8'h91, 32'h1000, 32'h0000, 32'h00007FFF, 2'b10);   // 1/0: INV
+            dchk(8'h91, 32'h0000, 32'h0000, 32'h00000000, 2'b10);   // 0/0: INV
+            dchk(8'h91, 32'h7000, 32'h0800, 32'h00007FFF, 2'b01);   // 7/0.5 = 14: SAT
+            dchk(8'h91, 32'hC000, 32'h0800, 32'hFFFF8000, 2'b00);   // -4/0.5 = -8 exactly: not clipped
+            dchk(8'h8F, 32'h2000, 32'h0000, 32'h000016A1, 2'b00);   // sqrt 2 = 5792.62 LSB
+            dchk(8'h8F, 32'hFFFF, 32'h0000, 32'hFFFF8000, 2'b10);   // sqrt of < 0: INV
+            dchk(8'h8F, 32'h0000, 32'h0000, 32'h00000000, 2'b00);   // sqrt 0
+            dchk(8'h8E, 32'h0000, 32'h0000, 32'hFFFF8000, 2'b10);   // ln 0: INV
+            dchk(8'h8D, 32'h3000, 32'h0000, 32'h00007FFF, 2'b01);   // exp 3 = 20.1: SAT
+            $display("exact mul/div/sqrt and flags: %0s", errors == e0 ? "OK" : "FAILED");
             // v0.9 queues: 5 EXECs back to back (the 5th must be rejected while 4
             // wait, or accepted if one already started), then the results in order
             e0 = errors;

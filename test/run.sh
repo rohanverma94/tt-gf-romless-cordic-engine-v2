@@ -7,10 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
-NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/xc_frame.v src/xc_bist.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
+NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/xc_frame.v src/xc_bist.v src/xc_exact.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
 ORIG="third_party/ttsky_orig/project.v third_party/ttsky_orig/spi_slave.v third_party/ttsky_orig/top_fsm.v
       third_party/ttsky_orig/top_CORDIC_Engine_v1.v third_party/ttsky_orig/CORDIC_Engine_v1.v
-      third_party/ttsky_orig/dynamic_atan.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
+      third_party/ttsky_orig/dynamic_atan.v src/xc_exact.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
 fail=0
 for g in 0 4; do
     iverilog -g2012 -DG=$g -o build/tb_g$g test/tb_spi.v $NEW
