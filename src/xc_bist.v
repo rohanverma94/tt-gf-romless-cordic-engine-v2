@@ -1,6 +1,6 @@
 // xc_bist.v — built-in self-test between the instruction source and the core.
 //
-// Transparent for every instruction except op 20 (funct7 = 2,
+// v0.9. Transparent for every instruction except op 20 (funct7 = 2,
 // funct3 = 4), cordic.bist:
 //   rs1[15:0] = N, the number of instructions to run (0..65535)
 //   rs2       = LFSR seed (0 is replaced by 1)
@@ -9,7 +9,8 @@
 // cfg (FUNCS = 1: 0-6, 8-19; FUNCS = 0: 0-6), each with rs1 and rs2 drawn from
 // a 32-bit Galois LFSR (mask 0x80200003, stepped once for rs1 and once for
 // rs2), and folds every rd into a 32-bit MISR (same mask, starts at
-// 0xFFFFFFFF):  misr = (misr >> 1 ^ (misr[0] ? 0x80200003 : 0)) ^ rd.
+// 0xFFFFFFFF):  misr = (misr >> 1 ^ (misr[0] ? 0x80200003 : 0)) ^ rd ^ flags << 30
+// (v1.0: the result flags {INV, SAT} go into bits 31:30).
 // The core's cfg registers are used as they are (reset values after reset).
 // host/pico_harness/xc_model.hpp computes the same signature (Model::exec).
 //
@@ -33,6 +34,7 @@ module xc_bist #(
     output wire        u_busy,
     output wire        u_done,
     output wire [31:0] u_rd,
+    output wire [1:0]  u_flags,             // {INV, SAT} (v1.0)
     // core
     output wire        c_start,
     output wire [6:0]  c_funct7,
@@ -41,7 +43,8 @@ module xc_bist #(
     output wire [31:0] c_rs2,
     input  wire        c_busy,
     input  wire        c_done,
-    input  wire [31:0] c_rd
+    input  wire [31:0] c_rd,
+    input  wire [1:0]  c_flags
 );
     localparam [31:0] MASK = 32'h80200003;
     localparam [4:0]  LAST = (FUNCS != 0) ? 5'd19 : 5'd6;
@@ -72,6 +75,7 @@ module xc_bist #(
     assign u_busy   = c_busy || active;
     assign u_done   = bdone || (c_done && !active);
     assign u_rd     = bdone ? misr : c_rd;
+    assign u_flags  = bdone ? 2'b00 : c_flags;
 
     wire [31:0] l1 = lstep(lfsr);
     wire [31:0] l2 = lstep(l1);
@@ -107,7 +111,7 @@ module xc_bist #(
                 end
             end
             B_RUN: if (c_done && !bstart) begin
-                misr <= lstep(misr) ^ c_rd;
+                misr <= lstep(misr) ^ c_rd ^ {c_flags, 30'd0};   // v1.0: flags too
                 bk   <= bk + 16'd1;
                 bop  <= (bop == 5'd6) ? ((FUNCS != 0) ? 5'd8 : 5'd0) :
                         (bop == LAST) ? 5'd0 : bop + 5'd1;

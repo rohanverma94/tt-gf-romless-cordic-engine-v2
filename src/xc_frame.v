@@ -16,7 +16,10 @@
 //   MOSI: CMD, RS1[7:0], RS1[15:8], RS1[23:16], RS1[31:24], RS2[7:0] .. RS2[31:24]
 //         CMD = {EXEC, 2'b00, op[4:0]},  op = funct7 * 8 + funct3 (0..19; 20 = bist)
 //         a frame shorter than 9 bytes leaves the missing bytes 0; EXEC needs >= 5
-//   MISO: STATUS, RD[7:0], RD[15:8], RD[23:16], RD[31:24], then 0
+//   MISO: STATUS, RD[7:0], RD[15:8], RD[23:16], RD[31:24], FLAGS, then 0
+//         FLAGS = {6'b0, INV, SAT} of the result in RD (v1.0): SAT = the result
+//         (either half of a pair) was clipped to [-8, 8); INV = invalid argument
+//         (div by 0, ln of a <= 0, sqrt of a < 0)
 //         STATUS = {SEQ[3:0], FULL, ERR, VALID, BUSY}, sampled when CS falls:
 //           BUSY  an instruction is executing or queued
 //           VALID RD holds an unread result (the oldest); SEQ is its number
@@ -24,7 +27,7 @@
 //                 last completed instruction's
 //           FULL  the instruction queue is full: an EXEC now would be rejected
 //           ERR   the last EXEC was rejected (queue full, illegal op, frame too short)
-//   v0.9 queues: up to 4 instructions wait in an input queue and run in order;
+//   queues: up to 4 instructions wait in an input queue and run in order;
 //   up to 4 results wait in an output queue. An instruction starts when the
 //   core is free and its result has a place. A frame that clocks out the
 //   whole result (>= 5 bytes) while VALID was set takes that result off the
@@ -65,6 +68,7 @@ module xc_frame #(
     input  wire        c_busy,
     input  wire        c_done,
     input  wire [31:0] c_rd,
+    input  wire [1:0]  c_flags,              // {INV, SAT} with c_rd (v1.0)
     // pins
     output wire        data_ready,
     output wire        busy
@@ -99,26 +103,28 @@ module xc_frame #(
     reg [7:0]  ccmd;
     reg [31:0] crs1, crs2;
     reg [31:0] crd;                         // last completed result
+    reg [1:0]  cflg;                        // ... and its flags (v1.0)
     reg        cerr;
     reg [3:0]  cseq;                        // completions (mod 16)
     reg        cexec;                       // the core is running a command-mode instruction
     reg        cpend;                       // an EXEC command byte arrived, frame end not yet seen
-    reg [39:0] csnap;                       // {RD, STATUS} as seen by this frame
+    reg [47:0] csnap;                       // {FLAGS, RD, STATUS} as seen by this frame
     reg        cfv;                         // VALID in this frame's snapshot
     reg        cany;                        // an instruction has finished since reset
-    // input queue {op, rs1, rs2} and output queue {seq, rd}, 4 deep (v0.9)
+    // input queue {op, rs1, rs2} and output queue {flags, seq, rd}, 4 deep (v0.9; flags v1.0)
     reg [68:0] iq_m [0:3];
     reg [1:0]  iq_w, iq_r;
     reg [2:0]  iq_n;
-    reg [35:0] oq_m [0:3];
+    reg [37:0] oq_m [0:3];
     reg [1:0]  oq_w, oq_r;
     reg [2:0]  oq_n;
     wire [68:0] iq_head = iq_m[iq_r];
-    wire [35:0] oq_head = oq_m[oq_r];
+    wire [37:0] oq_head = oq_m[oq_r];
     wire       cvalid = (oq_n != 3'd0);
     wire       cfull  = (iq_n == 3'd4);
     wire [31:0] crd_out = cvalid ? oq_head[31:0]  : crd;
     wire [3:0]  cseq_out = cvalid ? oq_head[35:32] : cseq;
+    wire [1:0]  cflg_out = cvalid ? oq_head[37:36] : cflg;
     wire [7:0] cstatus = {cseq_out, cfull, cerr, cvalid, c_busy || cexec || (iq_n != 3'd0)};
     wire [4:0] cop = ccmd[4:0];
     wire       cop_ok = ((FUNCS != 0) ? (cop <= 5'd19) : (cop <= 5'd7)) || (cop == 5'd20);
@@ -128,10 +134,10 @@ module xc_frame #(
     wire       c_fin   = cexec && c_done && !c_start;
     wire       c_pop   = proto && frame_end && (ck >= 4'd5) && cfv && cvalid;
 
-    function [7:0] cbyte(input [39:0] v, input [3:0] k);
+    function [7:0] cbyte(input [47:0] v, input [3:0] k);
         case (k)
             4'd0: cbyte = v[7:0];   4'd1: cbyte = v[15:8];  4'd2: cbyte = v[23:16];
-            4'd3: cbyte = v[31:24]; 4'd4: cbyte = v[39:32];
+            4'd3: cbyte = v[31:24]; 4'd4: cbyte = v[39:32]; 4'd5: cbyte = v[47:40];
             default: cbyte = 8'd0;
         endcase
     endfunction
@@ -139,7 +145,7 @@ module xc_frame #(
     // =====================================================================
     // transmit bytes
     // =====================================================================
-    wire [39:0] csrc = cs_on ? csnap : {crd_out, cstatus};  // live while idle
+    wire [47:0] csrc = cs_on ? csnap : {6'd0, cflg_out, crd_out, cstatus};  // live while idle
     // legacy: in the cycle a read byte completes the position is already the
     // next one, so a CS-high gap of a single cycle still loads the right byte (N2)
     wire [2:0] lk_cur = (rx_valid && ls == L_TX) ? lk + 3'd1 : lk;
@@ -166,7 +172,7 @@ module xc_frame #(
         if (!rst_n) begin
             proto <= 1'b0;
             ls <= L_IDLE; lk <= 0; lin <= 0; lout <= 0; lready <= 0; lquiet <= 0;
-            ck <= 0; ccmd <= 0; crs1 <= 0; crs2 <= 0; crd <= 0;
+            ck <= 0; ccmd <= 0; crs1 <= 0; crs2 <= 0; crd <= 0; cflg <= 0;
             cerr <= 0; cseq <= 0; cexec <= 0; cpend <= 0; csnap <= 0; cfv <= 0; cany <= 0;
             iq_w <= 0; iq_r <= 0; iq_n <= 0; oq_w <= 0; oq_r <= 0; oq_n <= 0;
             // queue entries reset too: unknown contents can otherwise leak into
@@ -234,7 +240,7 @@ module xc_frame #(
                 endcase
             end else begin
                 // ---------------- command ----------------
-                if (!cs_on) csnap <= {crd_out, cstatus};
+                if (!cs_on) csnap <= {6'd0, cflg_out, crd_out, cstatus};
                 if (frame_start) cfv <= csnap[1];
                 if (frame_start) ck <= 0;
                 else if (rx_valid) begin
@@ -268,9 +274,10 @@ module xc_frame #(
                 iq_n <= iq_n + {2'd0, c_push} - {2'd0, c_disp};
                 // completion: the result joins the output queue (room was reserved)
                 if (c_fin) begin
-                    oq_m[oq_w] <= {cseq + 4'd1, c_rd};
+                    oq_m[oq_w] <= {c_flags, cseq + 4'd1, c_rd};
                     oq_w <= oq_w + 2'd1;
                     crd <= c_rd;
+                    cflg <= c_flags;
                     cseq <= cseq + 1'b1;
                     cexec <= 1'b0;
                     cany <= 1'b1;

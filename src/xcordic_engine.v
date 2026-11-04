@@ -9,7 +9,7 @@
 // In circular rotation mode with atan1 = 0x0758 this is bit-exact with the
 // ttsky25a silicon (checked in model/check_vs_original.py).
 //
-// the ROM-less micro-angle generator runs one iteration ahead: its shift
+// The ROM-less micro-angle generator runs one iteration ahead: its shift
 // and angle for the next iteration are registered (q_shift, q_angle), so an
 // iteration is only shift + add (100 MHz on sky130). Outputs are unchanged,
 // cycle for cycle (F2).
@@ -19,6 +19,10 @@
 // shifted-out bit is the adder's carry-in) and holds x, y, z once z is
 // exactly 0. The core uses it for mac and mul: mul's worst error drops from
 // 4.0 to 1.4 LSB. The specification changed with it (F2).
+//
+// The shift is formed two iterations ahead (n_s, with 3s and 5s), so
+// the angle for the next iteration comes from registers through
+// xcordic_aval only; iteration 0 is a plain select. Outputs unchanged (F2).
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -57,19 +61,35 @@ module xcordic_engine #(
 
     // angle generator one iteration ahead: at the accepting start it forms
     // iteration 0 of the new run, while busy iteration iter + 1
-    wire [1:0] g_mode = o_busy ? mode : i_mode;
-    wire [4:0] g_iter = o_busy ? iter + 5'd1 : 5'd0;
-    wire [4:0] g_shift;
-    wire [DATA_WIDTH-1:0] g_angle;
+    // v1.1: two iterations ahead for the shift. n_s, n_s3, n_s5 hold the shift
+    // of iteration iter + 1 (and 3x, 5x it) while busy, so the angle for that
+    // iteration is formed from registers only; the shift itself is formed one
+    // cycle earlier still, off the angle path. Iteration 0's shift (0, or 1 for
+    // hyperbolic) and angle (atan0, 1 or atanh1) are plain selects. The shift
+    // and angle registers hold exactly what the v1.0 generator gave (F2).
+    wire [4:0] a_s;                              // shift of the iteration after the next
+    xcordic_ashift #(.N_PE(N_PE)) u_ash (
+        .i_mode(o_busy ? mode : i_mode), .i_iter(o_busy ? iter + 5'd2 : 5'd1), .o_shift(a_s));
+    reg  [4:0] n_s;
+    reg  [7:0] n_s3, n_s5;
+    wire [DATA_WIDTH-1:0] v_angle;
+    xcordic_aval #(.DATA_WIDTH(DATA_WIDTH), .GUARD(GUARD)) u_aval (
+        .i_mode(mode), .i_shift(n_s), .i_s3(n_s3), .i_s5(n_s5),
+        .i_atan0(i_atan0), .i_atan1(i_atan1), .i_atanh1(i_atanh1), .o_angle(v_angle));
+    localparam integer F_ONE = DATA_WIDTH - 4;
+    wire [DATA_WIDTH-1:0] one_f = {{(DATA_WIDTH-1){1'b0}}, 1'b1} << F_ONE;
+    wire [4:0]            s0 = (i_mode == M_HYP) ? 5'd1 : 5'd0;
+    wire [DATA_WIDTH-1:0] a0 = (i_mode == M_HYP) ? i_atanh1 : (i_mode == M_LIN) ? one_f : i_atan0;
 
-    xcordic_atan #(.DATA_WIDTH(DATA_WIDTH), .N_PE(N_PE), .GUARD(GUARD)) u_atan (
-        .i_mode(g_mode), .i_iter(g_iter),
-        .i_atan0(i_atan0), .i_atan1(i_atan1), .i_atanh1(i_atanh1),
-        .o_shift(g_shift), .o_angle(g_angle)
-    );
     reg [4:0] shift;                             // for iteration iter
     reg signed [DATA_WIDTH-1:0] angle;
-    always @(posedge i_clk) begin shift <= g_shift; angle <= g_angle; end
+    always @(posedge i_clk) begin
+        shift <= o_busy ? n_s : s0;
+        angle <= o_busy ? v_angle : a0;
+        n_s  <= a_s;
+        n_s3 <= 8'd3 * {3'd0, a_s};
+        n_s5 <= 8'd5 * {3'd0, a_s};
+    end
 
     // sigma = +1 when pos
     wire pos = (dir == D_DIV) ? (o_y[DATA_WIDTH-1] ^ o_x[DATA_WIDTH-1]) :

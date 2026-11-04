@@ -19,6 +19,14 @@
 //   and 1/5 ~ 1/8+1/16+1/128+1/256 (x^5 <= 2^-10, so finer terms shift out),
 //   then rounded to F bits (worst table error ~1 LSB of F bits, see
 //   toolchain/gen_consts.cpp).
+//
+// xcordic_ashift gives the shift of (mode, iteration);
+// xcordic_aval gives the angle of (mode, shift), taking 3s and 5s as inputs so
+// a caller can register them. The engine keeps the next iteration's shift,
+// 3s and 5s in registers, so its angle path starts at registers (in the v1.0
+// layout this path, busy -> +1 -> shift -> 3s -> pattern shift -> adds, was the
+// second slowest). xcordic_atan (mode, iteration) -> (shift, angle) is the two
+// combined, as before; F2 uses it as the reference for the engine's registers.
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -33,30 +41,63 @@ module xcordic_atan #(
     input  wire [DATA_WIDTH-1:0]        i_atan1,
     input  wire [DATA_WIDTH-1:0]        i_atanh1,
     output wire [4:0]                   o_shift,
+    output wire [DATA_WIDTH-1:0]        o_angle
+);
+    xcordic_ashift #(.N_PE(N_PE)) u_s (.i_mode(i_mode), .i_iter(i_iter), .o_shift(o_shift));
+    xcordic_aval #(.DATA_WIDTH(DATA_WIDTH), .GUARD(GUARD)) u_v (
+        .i_mode(i_mode), .i_shift(o_shift), .i_s3(8'd3 * {3'd0, o_shift}), .i_s5(8'd5 * {3'd0, o_shift}),
+        .i_atan0(i_atan0), .i_atan1(i_atan1), .i_atanh1(i_atanh1), .o_angle(o_angle));
+endmodule
+
+// the shift of iteration i_iter
+module xcordic_ashift #(
+    parameter N_PE = 13
+)(
+    input  wire [1:0] i_mode,
+    input  wire [4:0] i_iter,
+    output wire [4:0] o_shift
+);
+    localparam [1:0] M_HYP = 2'd2;
+    localparam REP13 = (N_PE >= 14);
+    // hyperbolic: shift = iter + 1, minus one after each repeated stage (4, 13)
+    wire [4:0] s_hyp = i_iter + 5'd1 - {4'd0, (i_iter >= 5'd4)}
+                                     - {4'd0, (REP13 && i_iter >= 5'd14)};
+    assign o_shift = (i_mode == M_HYP) ? s_hyp : i_iter;
+endmodule
+
+// the angle for shift s (i_s3 = 3s, i_s5 = 5s)
+module xcordic_aval #(
+    parameter DATA_WIDTH = 16,
+    parameter GUARD = 0
+)(
+    input  wire [1:0]                   i_mode,
+    input  wire [4:0]                   i_shift,
+    input  wire [7:0]                   i_s3,
+    input  wire [7:0]                   i_s5,
+    input  wire [DATA_WIDTH-1:0]        i_atan0,
+    input  wire [DATA_WIDTH-1:0]        i_atan1,
+    input  wire [DATA_WIDTH-1:0]        i_atanh1,
     output reg  [DATA_WIDTH-1:0]        o_angle
 );
     localparam [1:0] M_CIRC = 2'd0, M_LIN = 2'd1, M_HYP = 2'd2;
     localparam integer F  = DATA_WIDTH - 4;
     localparam integer X  = (GUARD > 0) ? 4 : 0;        // extra internal fraction bits
     localparam integer IW = DATA_WIDTH + X;
-    localparam REP13 = (N_PE >= 14);
-
-    // hyperbolic: shift = iter + 1, minus one after each repeated stage (4, 13)
-    wire [4:0] s_hyp = i_iter + 5'd1 - {4'd0, (i_iter >= 5'd4)}
-                                     - {4'd0, (REP13 && i_iter >= 5'd14)};
-    assign o_shift = (i_mode == M_HYP) ? s_hyp : i_iter;
 
     wire [DATA_WIDTH-1:0] one_f = {{(DATA_WIDTH-1){1'b0}}, 1'b1} << F;
     wire [IW-1:0]         one_i = {{(IW-1){1'b0}}, 1'b1} << (F + X);
-    wire [IW-1:0]         p1    = one_i >> o_shift;
-    wire [IW-1:0]         p3    = one_i >> (3 * o_shift);
-    wire [IW-1:0]         p5    = one_i >> (5 * o_shift);
-    wire [IW-1:0]         third = (GUARD > 0)
-        ? (p3 >> 2) + (p3 >> 4) + (p3 >> 6) + (p3 >> 8) + (p3 >> 10)
-        : (p3 >> 2) + (p3 >> 4) + (p3 >> 6);
-    wire [IW-1:0]         fifth = (GUARD > 0)
-        ? (p5 >> 3) + (p5 >> 4) + (p5 >> 7) + (p5 >> 8)
-        : {IW{1'b0}};
+    wire [IW-1:0]         p1    = one_i >> i_shift;
+    // x^3/3 = (p3 >> 2) + (p3 >> 4) + ... with p3 = one_i >> 3s, a single set
+    // bit: the terms never overlap, so their sum is the constant pattern
+    // (one_i >> 2) | (one_i >> 4) | ... shifted right by 3s (logical shifts
+    // compose, and drop the same low bits). Same bits as the sum, no adders
+    // (v1.0: this was the generator's slowest path). x^5/5 likewise.
+    wire [IW-1:0]         pat3  = (GUARD > 0)
+        ? (one_i >> 2) | (one_i >> 4) | (one_i >> 6) | (one_i >> 8) | (one_i >> 10)
+        : (one_i >> 2) | (one_i >> 4) | (one_i >> 6);
+    wire [IW-1:0]         pat5  = (one_i >> 3) | (one_i >> 4) | (one_i >> 7) | (one_i >> 8);
+    wire [IW-1:0]         third = pat3 >> i_s3;
+    wire [IW-1:0]         fifth = (GUARD > 0) ? (pat5 >> i_s5) : {IW{1'b0}};
     wire [IW-1:0]         t_circ = p1 - third + fifth;
     wire [IW-1:0]         t_hyp  = p1 + third + fifth;
     wire [IW-1:0]         r_bias = (X > 0) ? ({{(IW-1){1'b0}}, 1'b1} << (X - 1)) : {IW{1'b0}};
@@ -65,14 +106,14 @@ module xcordic_atan #(
 
     always @* begin
         case (i_mode)
-            M_LIN: o_angle = one_f >> o_shift;
+            M_LIN: o_angle = one_f >> i_shift;
             M_HYP: begin
-                if (o_shift == 5'd1)      o_angle = i_atanh1;
+                if (i_shift == 5'd1)      o_angle = i_atanh1;
                 else                      o_angle = a_hyp[DATA_WIDTH-1:0];
             end
             default: begin
-                if (o_shift == 5'd0)      o_angle = i_atan0;
-                else if (o_shift == 5'd1) o_angle = i_atan1;
+                if (i_shift == 5'd0)      o_angle = i_atan0;
+                else if (i_shift == 5'd1) o_angle = i_atan1;
                 else                      o_angle = a_circ[DATA_WIDTH-1:0];
             end
         endcase
