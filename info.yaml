@@ -21,10 +21,11 @@ project:
     - "xc_spi_slave_sclk.v"
     - "xc_meta.v"
     - "xc_frame.v"
+    - "xc_bist.v"
     - "xcordic_core.v"
     - "xcordic_engine.v"
     - "xcordic_atan.v"
-
+    
 pinout:
   # Inputs
   ui[0]: "SCLK"
