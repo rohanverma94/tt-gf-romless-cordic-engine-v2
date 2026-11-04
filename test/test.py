@@ -109,7 +109,11 @@ async def test_xcordic(dut):
     close(await run((1, 6), q12(3.0)), math.log(3.0), "ln")
     close(await run((1, 7), q12(5.0)), math.sqrt(5.0), "sqrt")
     close(await run((1, 3), q12(0.6), q12(-0.8)), math.atan2(0.6, -0.8), "atan2")
-    close(await run((2, 0), q12(1.25), q12(-2.5)), 1.25 * -2.5, "mul", tol=4)
+    close(await run((2, 0), q12(1.25), q12(-2.5)), 1.25 * -2.5, "mul", tol=0)
     close(await run((2, 1), q12(1.0), q12(3.0)), 1 / 3, "div")
     close(await run((2, 2), q12(-0.75)), math.tanh(-0.75), "tanh")
-    dut._log.info("legacy and command protocol: all results within tolerance")
+    # cordic.bist: 25 instructions from seed 0x12345678; the signature is the
+    # golden model's (host/pico_harness/xc_model.hpp, GUARD = 4, cfg at reset)
+    sig = await run((2, 4), 25, 0x12345678)
+    assert sig == 0x52BB2160, f"bist signature {sig:08x}"
+    dut._log.info("legacy and command protocol: all results within tolerance, bist signature OK")

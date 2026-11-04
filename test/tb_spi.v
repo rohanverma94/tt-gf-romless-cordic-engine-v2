@@ -75,8 +75,19 @@ module tb_spi;
     // ---------------- reference core ----------------
     reg r_start = 0; reg [6:0] r_f7; reg [2:0] r_f3; reg [31:0] r_rs1, r_rs2;
     wire r_busy, r_done; wire [31:0] r_rd;
+`ifdef ORIG
     xcordic_core #(.GUARD(RG)) ref_core (.clk(clk), .rstn(rst_n), .start(r_start), .funct7(r_f7),
         .funct3(r_f3), .rs1(r_rs1), .rs2(r_rs2), .busy(r_busy), .done(r_done), .rd(r_rd));
+`else
+    // reference: a separate self-test unit + core (v0.9), so cordic.bist has a reference too
+    wire rc_start, rc_busy, rc_done; wire [6:0] rc_f7; wire [2:0] rc_f3; wire [31:0] rc_rs1, rc_rs2, rc_rd;
+    xc_bist ref_bist (.clk(clk), .rst_n(rst_n), .u_start(r_start), .u_funct7(r_f7), .u_funct3(r_f3),
+        .u_rs1(r_rs1), .u_rs2(r_rs2), .u_busy(r_busy), .u_done(r_done), .u_rd(r_rd),
+        .c_start(rc_start), .c_funct7(rc_f7), .c_funct3(rc_f3), .c_rs1(rc_rs1), .c_rs2(rc_rs2),
+        .c_busy(rc_busy), .c_done(rc_done), .c_rd(rc_rd));
+    xcordic_core #(.GUARD(RG)) ref_core (.clk(clk), .rstn(rst_n), .start(rc_start), .funct7(rc_f7),
+        .funct3(rc_f3), .rs1(rc_rs1), .rs2(rc_rs2), .busy(rc_busy), .done(rc_done), .rd(rc_rd));
+`endif
     task ref_exec(input [6:0] f7, input [2:0] f3, input [31:0] a, input [31:0] b, output [31:0] rd);
         begin
             @(negedge clk); r_f7 = f7; r_f3 = f3; r_rs1 = a; r_rs2 = b; r_start = 1;
@@ -272,7 +283,7 @@ module tb_spi;
             end
             $display("command: %0d instructions, %0d errors", ncmd, errors - e0);
             // error cases: illegal op, short frame, exec while busy
-            cmd(8'h94, 0, 0, 9, st, rd); cmd(8'h00, 0, 0, 1, st, rd);
+            cmd(8'h95, 0, 0, 9, st, rd); cmd(8'h00, 0, 0, 1, st, rd);     // op 21: illegal
             if (!st[2]) begin errors = errors + 1; $display("  illegal op not flagged"); end
             cmd(8'h88, 32'h1000, 0, 3, st, rd); cmd(8'h00, 0, 0, 1, st, rd);
             if (!st[2]) begin errors = errors + 1; $display("  short frame not flagged"); end
@@ -287,6 +298,43 @@ module tb_spi;
             ref_exec(1, 1, 32'h0800, 0, want);
             if (rd !== want) begin errors = errors + 1; $display("  pipelined exec wrong"); end
             $display("command error/status cases: %0s", errors == e0 ? "OK" : "FAILED");
+            // v0.9 queues: 5 EXECs back to back (the 5th must be rejected while 4
+            // wait, or accepted if one already started), then the results in order
+            e0 = errors;
+            begin : queue_test
+                // every frame of >= 5 bytes returns (and removes) the oldest unread
+                // result when its STATUS shows VALID: collect them in order
+                integer q, nacc, ngot; reg [31:0] qa [0:4]; reg [31:0] got [0:4]; reg [31:0] qw;
+                nacc = 0; ngot = 0;
+                for (q = 0; q < 5; q = q + 1) begin
+                    qa[q] = 32'h0400 * (q + 1);
+                    cmd(8'h88, qa[q], 0, 5, st, rd);                 // sin((q+1)/4)
+                    if (st[1]) begin got[ngot] = rd; ngot = ngot + 1; end
+                    cmd(8'h00, 0, 0, 1, st, rd);
+                    if (!st[2]) nacc = nacc + 1;
+                end
+                if (nacc != 5) begin errors = errors + 1; $display("  queue accepted %0d of 5", nacc); end
+                wait_idle;
+                while (ngot < nacc) begin
+                    cmd(8'h00, 0, 0, 5, st, rd);
+                    if (!st[1]) begin errors = errors + 1; $display("  result %0d missing", ngot); ngot = nacc; end
+                    else begin got[ngot] = rd; ngot = ngot + 1; end
+                end
+                for (q = 0; q < nacc; q = q + 1) begin
+                    ref_exec(1, 0, qa[q], 0, qw);
+                    if (got[q] !== qw) begin errors = errors + 1; $display("  queued result %0d: %08h want %08h", q, got[q], qw); end
+                end
+                cmd(8'h00, 0, 0, 5, st, rd);
+                if (st[1]) begin errors = errors + 1; $display("  results left after reading all"); end
+            end
+            // cordic.bist (op 20): N = 0 -> 0xFFFFFFFF; N = 25 against the reference unit
+            cmd(8'h94, 32'd0, 32'd0, 9, st, rd); wait_idle; cmd(8'h00, 0, 0, 5, st, rd);
+            if (rd !== 32'hFFFFFFFF) begin errors = errors + 1; $display("  bist N=0: %08h", rd); end
+            cmd(8'h94, 32'd25, 32'h1234_5678, 9, st, rd); wait_idle; cmd(8'h00, 0, 0, 5, st, rd);
+            ref_exec(2, 4, 32'd25, 32'h1234_5678, want);
+            if (rd !== want) begin errors = errors + 1; $display("  bist N=25: %08h want %08h", rd, want); end
+            checks = checks + 8;
+            $display("command queues and bist: %0s (bist 25 = %08h)", errors == e0 ? "OK" : "FAILED", rd);
         end
 `endif
         $display("RESULT: %0d checks, %0d errors", checks, errors);
