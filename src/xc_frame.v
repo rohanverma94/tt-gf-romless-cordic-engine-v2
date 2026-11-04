@@ -14,15 +14,26 @@
 //
 // PROTO = 1, command: one CS frame per instruction, any Xcordic instruction.
 //   MOSI: CMD, RS1[7:0], RS1[15:8], RS1[23:16], RS1[31:24], RS2[7:0] .. RS2[31:24]
-//         CMD = {EXEC, 2'b00, op[4:0]},  op = funct7 * 8 + funct3 (0..19)
+//         CMD = {EXEC, 2'b00, op[4:0]},  op = funct7 * 8 + funct3 (0..19; 20 = bist)
 //         a frame shorter than 9 bytes leaves the missing bytes 0; EXEC needs >= 5
 //   MISO: STATUS, RD[7:0], RD[15:8], RD[23:16], RD[31:24], then 0
-//         STATUS = {SEQ[3:0], 1'b0, ERR, VALID, BUSY}, sampled when CS falls:
-//           BUSY  an instruction is executing
-//           VALID RD holds a result (SEQ counts completed instructions, mod 16)
-//           ERR   the last EXEC was rejected (core busy, illegal op, frame too short)
-//   The instruction starts when CS rises. Reading a result and starting the
-//   next instruction can share one frame.
+//         STATUS = {SEQ[3:0], FULL, ERR, VALID, BUSY}, sampled when CS falls:
+//           BUSY  an instruction is executing or queued
+//           VALID RD holds an unread result (the oldest); SEQ is its number
+//                 (completions mod 16); with no unread result RD/SEQ are the
+//                 last completed instruction's
+//           FULL  the instruction queue is full: an EXEC now would be rejected
+//           ERR   the last EXEC was rejected (queue full, illegal op, frame too short)
+//   v0.9 queues: up to 4 instructions wait in an input queue and run in order;
+//   up to 4 results wait in an output queue. An instruction starts when the
+//   core is free and its result has a place. A frame that clocks out the
+//   whole result (>= 5 bytes) while VALID was set takes that result off the
+//   queue (the next frame shows the next one). One instruction at a time with
+//   a read in between works exactly as before; reading a result and queuing
+//   the next instruction can share one frame.
+//   DATA_READY: every queued instruction has finished (and at least one has
+//   finished since reset), as in v0.8; a result may or may not still be
+//   unread (VALID tells).
 //
 // The protocol is selected by the PROTO pin; it is taken over only while no
 // transaction is in progress and CS is high.
@@ -87,15 +98,35 @@ module xc_frame #(
     reg [3:0]  ck;                          // bytes received in this frame (saturates)
     reg [7:0]  ccmd;
     reg [31:0] crs1, crs2;
-    reg [31:0] crd;                         // last result
-    reg        cvalid, cerr;
-    reg [3:0]  cseq;
+    reg [31:0] crd;                         // last completed result
+    reg        cerr;
+    reg [3:0]  cseq;                        // completions (mod 16)
     reg        cexec;                       // the core is running a command-mode instruction
     reg        cpend;                       // an EXEC command byte arrived, frame end not yet seen
     reg [39:0] csnap;                       // {RD, STATUS} as seen by this frame
-    wire [7:0] cstatus = {cseq, 1'b0, cerr, cvalid, c_busy || cexec};
+    reg        cfv;                         // VALID in this frame's snapshot
+    reg        cany;                        // an instruction has finished since reset
+    // input queue {op, rs1, rs2} and output queue {seq, rd}, 4 deep (v0.9)
+    reg [68:0] iq_m [0:3];
+    reg [1:0]  iq_w, iq_r;
+    reg [2:0]  iq_n;
+    reg [35:0] oq_m [0:3];
+    reg [1:0]  oq_w, oq_r;
+    reg [2:0]  oq_n;
+    wire [68:0] iq_head = iq_m[iq_r];
+    wire [35:0] oq_head = oq_m[oq_r];
+    wire       cvalid = (oq_n != 3'd0);
+    wire       cfull  = (iq_n == 3'd4);
+    wire [31:0] crd_out = cvalid ? oq_head[31:0]  : crd;
+    wire [3:0]  cseq_out = cvalid ? oq_head[35:32] : cseq;
+    wire [7:0] cstatus = {cseq_out, cfull, cerr, cvalid, c_busy || cexec || (iq_n != 3'd0)};
     wire [4:0] cop = ccmd[4:0];
-    wire       cop_ok = (FUNCS != 0) ? (cop <= 5'd19) : (cop <= 5'd7);
+    wire       cop_ok = ((FUNCS != 0) ? (cop <= 5'd19) : (cop <= 5'd7)) || (cop == 5'd20);
+    // queue moves this cycle
+    wire       c_push  = proto && frame_end && ccmd[7] && (ck >= 4'd5) && cop_ok && !cfull;
+    wire       c_disp  = proto && !cexec && !c_start && !c_busy && (iq_n != 3'd0) && (oq_n != 3'd4);
+    wire       c_fin   = cexec && c_done && !c_start;
+    wire       c_pop   = proto && frame_end && (ck >= 4'd5) && cfv && cvalid;
 
     function [7:0] cbyte(input [39:0] v, input [3:0] k);
         case (k)
@@ -108,7 +139,7 @@ module xc_frame #(
     // =====================================================================
     // transmit bytes
     // =====================================================================
-    wire [39:0] csrc = cs_on ? csnap : {crd, cstatus};      // live while idle
+    wire [39:0] csrc = cs_on ? csnap : {crd_out, cstatus};  // live while idle
     // legacy: in the cycle a read byte completes the position is already the
     // next one, so a CS-high gap of a single cycle still loads the right byte (N2)
     wire [2:0] lk_cur = (rx_valid && ls == L_TX) ? lk + 3'd1 : lk;
@@ -123,8 +154,9 @@ module xc_frame #(
     // the pins drop DATA_READY / raise BUSY as soon as an EXEC command byte is
     // in, so a host polling them right after CS rises never sees the previous
     // instruction's "ready" (CS takes several core clocks to be seen; N2)
-    assign data_ready = proto ? (cvalid && !c_busy && !cexec && !cpend) : lready;
-    assign busy       = c_busy || cexec || cpend || (ls == L_CFG) || (ls == L_ROT) || (ls == L_WAIT);
+    assign data_ready = proto ? (cany && (iq_n == 3'd0) && !c_busy && !cexec && !cpend) : lready;
+    assign busy       = c_busy || cexec || cpend || (iq_n != 3'd0) ||
+                        (ls == L_CFG) || (ls == L_ROT) || (ls == L_WAIT);
 
     // =====================================================================
     // control
@@ -135,11 +167,16 @@ module xc_frame #(
             proto <= 1'b0;
             ls <= L_IDLE; lk <= 0; lin <= 0; lout <= 0; lready <= 0; lquiet <= 0;
             ck <= 0; ccmd <= 0; crs1 <= 0; crs2 <= 0; crd <= 0;
-            cvalid <= 0; cerr <= 0; cseq <= 0; cexec <= 0; cpend <= 0; csnap <= 0;
+            cerr <= 0; cseq <= 0; cexec <= 0; cpend <= 0; csnap <= 0; cfv <= 0; cany <= 0;
+            iq_w <= 0; iq_r <= 0; iq_n <= 0; oq_w <= 0; oq_r <= 0; oq_n <= 0;
+            // queue entries reset too: unknown contents can otherwise leak into
+            // the control logic in a gate-level simulation (X-pessimism)
+            iq_m[0] <= 0; iq_m[1] <= 0; iq_m[2] <= 0; iq_m[3] <= 0;
+            oq_m[0] <= 0; oq_m[1] <= 0; oq_m[2] <= 0; oq_m[3] <= 0;
             c_funct7 <= 0; c_funct3 <= 0; c_rs1 <= 0; c_rs2 <= 0;
         end else begin
             // take over the protocol pin only between transactions
-            if (!cs_on && ls == L_IDLE && !cexec && !cpend && !c_busy) proto <= proto_pin;
+            if (!cs_on && ls == L_IDLE && !cexec && !cpend && !c_busy && iq_n == 3'd0) proto <= proto_pin;
 
             if (!proto) begin
                 // ---------------- legacy ----------------
@@ -197,7 +234,8 @@ module xc_frame #(
                 endcase
             end else begin
                 // ---------------- command ----------------
-                if (!cs_on) csnap <= {crd, cstatus};
+                if (!cs_on) csnap <= {crd_out, cstatus};
+                if (frame_start) cfv <= csnap[1];
                 if (frame_start) ck <= 0;
                 else if (rx_valid) begin
                     case (ck)
@@ -214,22 +252,31 @@ module xc_frame #(
                 // frame_end comes after the frame's last rx_valid; a frame_start in
                 // the same cycle clears the frame registers only after this reads them
                 if (frame_end) cpend <= 1'b0;
-                if (frame_end && ccmd[7]) begin
-                    if (ck >= 4'd5 && cop_ok && !c_busy && !cexec) begin
-                        c_funct7 <= {5'd0, cop[4:3]}; c_funct3 <= cop[2:0];
-                        c_rs1 <= crs1; c_rs2 <= crs2;
-                        c_start <= 1'b1;
-                        cexec <= 1'b1;
-                        cerr <= 1'b0;
-                    end else
-                        cerr <= 1'b1;
+                if (frame_end && ccmd[7]) cerr <= !c_push;
+                if (c_push) begin
+                    iq_m[iq_w] <= {cop, crs1, crs2};
+                    iq_w <= iq_w + 2'd1;
                 end
-                if (cexec && c_done && !c_start) begin
+                // dispatch the oldest queued instruction
+                if (c_disp) begin
+                    c_funct7 <= {5'd0, iq_head[68:67]}; c_funct3 <= iq_head[66:64];
+                    c_rs1 <= iq_head[63:32]; c_rs2 <= iq_head[31:0];
+                    c_start <= 1'b1;
+                    cexec <= 1'b1;
+                    iq_r <= iq_r + 2'd1;
+                end
+                iq_n <= iq_n + {2'd0, c_push} - {2'd0, c_disp};
+                // completion: the result joins the output queue (room was reserved)
+                if (c_fin) begin
+                    oq_m[oq_w] <= {cseq + 4'd1, c_rd};
+                    oq_w <= oq_w + 2'd1;
                     crd <= c_rd;
-                    cvalid <= 1'b1;
                     cseq <= cseq + 1'b1;
                     cexec <= 1'b0;
+                    cany <= 1'b1;
                 end
+                if (c_pop) oq_r <= oq_r + 2'd1;
+                oq_n <= oq_n + {2'd0, c_fin} - {2'd0, c_pop};
             end
         end
     end

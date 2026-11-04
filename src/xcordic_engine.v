@@ -9,12 +9,12 @@
 // In circular rotation mode with atan1 = 0x0758 this is bit-exact with the
 // ttsky25a silicon (checked in model/check_vs_original.py).
 //
-// v0.7: the ROM-less micro-angle generator runs one iteration ahead: its shift
+// the ROM-less micro-angle generator runs one iteration ahead: its shift
 // and angle for the next iteration are registered (q_shift, q_angle), so an
 // iteration is only shift + add (100 MHz on sky130). Outputs are unchanged,
 // cycle for cycle (F2).
 //
-// v0.8 (GUARD > 0 only; GUARD = 0 stays bit-exact with silicon): dir = 3
+// (GUARD > 0 only; GUARD = 0 stays bit-exact with silicon): dir = 3
 // is a linear rotation that rounds x >> s instead of truncating it (the
 // shifted-out bit is the adder's carry-in) and holds x, y, z once z is
 // exactly 0. The core uses it for mac and mul: mul's worst error drops from

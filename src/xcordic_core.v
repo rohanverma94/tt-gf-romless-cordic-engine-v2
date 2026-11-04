@@ -1,11 +1,11 @@
 // xcordic_core.v — Xcordic instruction unit on the ttsky25a CORDIC datapath
 //
-// v0.3: native functions. The core sequences one to three engine passes per
+// The core sequences one to three engine passes per
 // instruction and does the range reduction itself, so sin, cos, tan, atan2,
 // hypot, exp, ln, sqrt, mul, div and tanh are each a single instruction over
 // their full S3.12 domain.
 //
-// v0.6: GUARD. The engine and every internal value carry GUARD extra fraction
+// The engine and every internal value carry GUARD extra fraction
 // bits: W = 16 + GUARD bit registers, values S3.F with F = 12 + GUARD, and
 // N_PE = 13 + (GUARD+1)/2 iterations. Operands enter as S3.12 shifted up by
 // GUARD; every result is rounded (half up) back to S3.12 and saturated.
@@ -17,7 +17,7 @@
 //   - tanh reduces -2|t| over [-16, 0] instead of saturating it at -8
 // The ISA does not change. cfg registers are W bits wide (values S3.F).
 //
-// v0.7: pipelined pass setup, for a 100 MHz core clock on sky130. Each pass
+// pipelined pass setup, for a 100 MHz core clock on sky130. Each pass
 // setup (S_PRE, S_MID) is preceded by capture cycles (S_PREP + S_PRE2,
 // S_MIDP) that register the first half of every long setup chain: the
 // normalization lanes' operands and leading-zero shifts, the wrapped and
@@ -25,11 +25,10 @@
 // then mantissa. The launch cycle then only shifts, negates and adds. Results
 // and engine launches are unchanged (F3); each instruction takes a few cycles more.
 //
-// v0.8: GUARD > 0 only. mac and mul launch their linear rotation pass with
-// dir = D_MUL: the engine rounds x >> s and holds at z = 0 (xcordic_engine.v).
-// mul's worst case drops from 4.0 to 1.4 LSB. The gain passes of hypot, sqrt
-// and rotc keep the truncating pass: their truncation offsets the vectoring
-// pass's bias (rounding them would raise hypot's mean error 0.37 -> 0.51 LSB).
+// mul uses a hardware multiplier: rs1 * rs2 is registered in S_PREP,
+// rounded half up to S3.12 and saturated in S_PRE2, and returned in S_PRE
+// (no engine pass). The result is exact (|error| <= 0.5 LSB), at any GUARD.
+// mac keeps its rounded linear-rotation pass (D_MUL).
 //
 // funct7 = 0  base passes (v0.2)            funct7 = 1  functions
 //   000 rot     {y,x}, th  -> K*{y',x'}       000 sin    a        -> sin a
@@ -195,6 +194,11 @@ module xcordic_core #(
     reg  signed [W+1:0] q_scv;           // scaler input value  (S_PREP / S_MIDP)
     reg  signed [6:0]   q_sce;           // scaler exponent     (S_PREP / S_MIDP)
     reg  signed [W+5:0] q_kl;            // k * ln2             (S_PRE2 / S_MIDS)
+    reg  signed [31:0]  q_prod;          // mul: rs1 * rs2, S6.24   (S_PREP, v0.9)
+    reg  signed [15:0]  q_mulr;          // mul: rounded, saturated (S_PRE2, v0.9)
+`ifdef XC_FV_MUL_FREE
+    (* anyseq *) wire signed [31:0] f_mul_any;   // F3 only: the product, left free
+`endif
     reg [3:0] state;
 
     // ---------------- operand fields (S3.12) ----------------
@@ -338,6 +342,11 @@ module xcordic_core #(
                                  (q_sc < -(1 << (W-1)))      ? {1'b1, {(W-1){1'b0}}} : q_sc[W-1:0];
     wire signed [W-1:0] m_val  = sc_wid;
 
+    // ---------------- hardware multiplier (v0.9) ----------------
+    // mul = rs1 * rs2 (S3.12 x S3.12 = S6.24), rounded half up to S3.12, saturated
+    wire signed [31:0] mul_r  = (q_prod + 32'sd2048) >>> 12;
+    wire signed [15:0] mul_rs = (mul_r > 32767) ? SAT_MAX : (mul_r < -32768) ? SAT_MIN : mul_r[15:0];
+
     function [31:0] sx(input [15:0] v);
         sx = {{16{v[15]}}, v};
     endfunction
@@ -407,8 +416,14 @@ module xcordic_core #(
             q_quad <= w_quadrant;  q_thm <= th_mapped;
             q_xt <= x_t;  q_xk <= x_k;  q_lne <= ln_e;
             q_scv <= sc_v;  q_sce <= sc_e;
+`ifdef XC_FV_MUL_FREE
+            q_prod <= f_mul_any;   // F3: product left free here, proved exhaustively (formal/exhaustive)
+`else
+            q_prod <= $signed(f_lo) * $signed(f_z);
+`endif
         end else if (state == S_PRE2 || state == S_MIDS) begin
             q_sc <= sc_r;  q_kl <= kl_c;
+            q_mulr <= mul_rs;
         end
 
     always @(posedge clk) begin
@@ -495,13 +510,7 @@ module xcordic_core #(
                         launch(M_HYP, D_VEC, m_val + ONE, m_val - ONE, {W{1'b0}});
                     end
                 end
-                OP_MUL: begin
-                    if (f_lo == 0 || f_z == 0) finish(32'd0);
-                    else begin
-                        kexp <= -(d_sa + d_sb);
-                        launch(M_LIN, D_MUL, dan, {W{1'b0}}, dbn);
-                    end
-                end
+                OP_MUL:                   finish(sx(q_mulr));       // v0.9: hardware multiplier
                 OP_DIV:                   launch_fdiv;
                 OP_ROTC: begin
                     if (q_va == 0 && q_vb == 0) finish(32'd0);     // p_zero, captured
@@ -542,7 +551,6 @@ module xcordic_core #(
                     if (pass == 1) launch(M_LIN, D_ROT, o_x, {W{1'b0}}, C_INV_2KH);
                     else           finish(sx(sc_out));
                 end
-                OP_MUL:          finish(sx(sc_out));
                 OP_DIV:          finish(sx(sc_out));
                 OP_TANH: begin
                     if (pass == 1) begin

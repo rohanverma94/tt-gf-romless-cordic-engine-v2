@@ -1,4 +1,4 @@
-// tt_um_xcordic — standalone Xcordic: all 20 Xcordic instructions behind SPI,
+// tt_um_xcordic — standalone Xcordic: all 20 Xcordic instructions behind SPI
 // with a legacy mode pin-compatible with tt_um_romless_cordic_engine (ttsky25a).
 //
 //   ui[0] SCLK     ui[1] MOSI     ui[2] CS_N    (as ttsky25a)
@@ -54,6 +54,11 @@ module tt_um_xcordic #(
         );
     end endgenerate
 
+    // frame -> self-test (xc_bist, transparent except cordic.bist) -> core
+    wire        f_start, f_busy, f_done;
+    wire [6:0]  f_funct7;
+    wire [2:0]  f_funct3;
+    wire [31:0] f_rs1, f_rs2, f_rd;
     wire        c_start, c_busy, c_done;
     wire [6:0]  c_funct7;
     wire [2:0]  c_funct3;
@@ -64,9 +69,17 @@ module tt_um_xcordic #(
         .rx_data(rx_data), .rx_valid(rx_valid), .cs_on(cs_on),
         .frame_start(frame_start), .frame_end(frame_end),
         .tx_data(tx_data), .tx_next(tx_next),
-        .c_start(c_start), .c_funct7(c_funct7), .c_funct3(c_funct3),
-        .c_rs1(c_rs1), .c_rs2(c_rs2), .c_busy(c_busy), .c_done(c_done), .c_rd(c_rd),
+        .c_start(f_start), .c_funct7(f_funct7), .c_funct3(f_funct3),
+        .c_rs1(f_rs1), .c_rs2(f_rs2), .c_busy(f_busy), .c_done(f_done), .c_rd(f_rd),
         .data_ready(data_ready), .busy(busy)
+    );
+
+    xc_bist #(.FUNCS(FUNCS)) bist (
+        .clk(clk), .rst_n(rst_n),
+        .u_start(f_start), .u_funct7(f_funct7), .u_funct3(f_funct3),
+        .u_rs1(f_rs1), .u_rs2(f_rs2), .u_busy(f_busy), .u_done(f_done), .u_rd(f_rd),
+        .c_start(c_start), .c_funct7(c_funct7), .c_funct3(c_funct3),
+        .c_rs1(c_rs1), .c_rs2(c_rs2), .c_busy(c_busy), .c_done(c_done), .c_rd(c_rd)
     );
 
     xcordic_core #(.FUNCS(FUNCS), .GUARD(GUARD)) core (
