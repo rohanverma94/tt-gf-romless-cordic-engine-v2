@@ -1,8 +1,8 @@
 ## How it works
 
-Xcordic is a ROM-less CORDIC function unit, a small math co-processor you talk to over SPI. Send it an instruction such as "sin of 0.5" or "divide a by b", and it sends back the answer as a 16-bit fixed-point number. It is the corrected successor of `tt_um_romless_cordic_engine` (ttsky25a), every block of it is formally verified, and this build targets the Tiny Tapeout GF26c shuttle (GlobalFoundries gf180mcuD, 3.3 V, 25 MHz clock, 3×4 tiles).
+Xcordic is a ROM-less CORDIC function unit, a small math co-processor you talk to over SPI. Send it an instruction such as "sin of 0.5" or "divide a by b", and it sends back the answer as a 16-bit fixed-point number. It is the corrected successor of `tt_um_romless_cordic_engine` (ttsky25a) and every block of it is formally verified.
 
-![Block diagram: pins, SPI slave, frame with command queues, self-test, and the core with its sequencer, CORDIC engine and exact unit](images/xcordic_blocks.png)
+![Block diagram](images/xcordic_blocks.png)
 
 **What it computes:**
 - **Trigonometry:** sin, cos, tan, atan2, hypot, and vector rotation (with or without the CORDIC gain).
@@ -19,7 +19,7 @@ Xcordic is a ROM-less CORDIC function unit, a small math co-processor you talk t
 
 Most functions run on **CORDIC**, an old trick for computing trigonometry with nothing but shifts and adds. To turn a vector by an angle θ, it turns it by a fixed sequence of ever-smaller angles, each step to the left or to the right, until the remaining angle is used up. The step angles are atan(1), atan(½), atan(¼) and so on. Multiplying by 2⁻ⁱ is just a right shift, so each step costs two shifts and three additions.
 
-![CORDIC turning toward 0.9 rad in shrinking left and right steps; the angle still to go about halves each step](images/cordic_rotation.png)
+![CORDIC rotation toward 0.9 rad](images/cordic_rotation.png)
 
 The steps also stretch the vector by a constant K ≈ 1.6468. Starting from x = 1/K cancels it, so the vector lands exactly on (cos θ, sin θ). Xcordic has no table of step angles: it computes each one from a short series (2⁻ⁱ − 2⁻³ⁱ/3 + 2⁻⁵ⁱ/5), and the two largest come from registers.
 
@@ -42,7 +42,7 @@ Every step is x ← x − m·σ·y·2⁻ⁱ, y ← y + σ·x·2⁻ⁱ, z ← z �
 
 The three examples below run the chip's step sequences on ideal numbers. The chip does the same steps in fixed point with 4 guard bits, and its rounded result lands within about one step (1/4096) of the true value.
 
-![Circular vectoring: (0.6, 0.8) is turned onto the x axis; z collects atan2 = 0.9273 and x ends at K times the length](images/example_circular.png)
+![Worked example: atan2(0.8, 0.6), circular vectoring](images/example_circular.png)
 
 **atan2(0.8, 0.6) by circular vectoring.** The point (0.6, 0.8) starts 53.1° above the x axis, with z = 0. Each step turns the vector toward the axis and adds the angle it turned to z:
 - Step 0: y is above the axis, so the vector turns right by 45°. It lands at (1.4, 0.2) with z = 0.7854.
@@ -53,7 +53,7 @@ Every turn also stretches the vector slightly. So x grows from 0.6 to 1.6468, an
 
 On the chip, atan2 and hypot first scale x and y by the same power of two, to use the whole register. A point with x < 0 is flipped through the origin first, and z starts at ±π.
 
-![Linear divide: x stays at cos 0.9 while y is driven to 0; z collects sin/cos = tan 0.9 = 1.2602](images/example_linear.png)
+![Worked example: tan 0.9, linear divide](images/example_linear.png)
 
 **tan 0.9 by a linear divide.** tan takes two passes. A circular rotation gives sin 0.9 = 0.7833 and cos 0.9 = 0.6216, and then this linear pass divides them. In linear mode x never changes. Each step adds or subtracts x·2⁻ⁱ to bring y closer to 0, and adds the matching ±2⁻ⁱ to z:
 - Step 0 subtracts 1·x: y = 0.1617, z = 1.
@@ -64,7 +64,7 @@ So z builds up y/x one signed binary digit per step. After 17 steps z = 1.26015;
 
 On the chip both operands are first scaled to the same range, and the result is scaled back at the end. tanh uses the same pass for its (1 − E) / (1 + E).
 
-![Hyperbolic rotation: starting at (1/K′, 0), the vector walks along x² − y² = 1 to (cosh 0.5, sinh 0.5); their sum is e^0.5 = 1.6487](images/example_hyperbolic.png)
+![Worked example: e^0.5, hyperbolic rotation](images/example_hyperbolic.png)
 
 **e^0.5 by hyperbolic rotation.** exp starts at x = 1/K′ = 1.2075, y = 0, z = 0.5. It rotates by z along a hyperbola instead of a circle, using the angles atanh 2⁻ⁱ:
 - The steps start at i = 1, because atanh 1 is infinite.
@@ -80,7 +80,7 @@ One hyperbolic pass only reaches about ±1.1, so exp first writes t = k·ln 2 + 
 
 The sequencer first brings each input into range, for example by folding an angle into one quadrant or by writing eᵗ as 2ᵏ · eʳ. Then it chains one to three engine passes, and rounds the result once at the end.
 
-![Each function as a recipe: prepare the input, one or two engine passes colored by geometry, then round](images/cordic_recipes.png)
+![Function recipes](images/cordic_recipes.png)
 
 mul, div and sqrt do not use CORDIC: a separate unit computes them exactly, one bit per clock, so their error is at most half a step.
 
@@ -88,13 +88,13 @@ mul, div and sqrt do not use CORDIC: a separate unit computes them exactly, one 
 
 All values are **S3.12**: 16-bit two's complement with 12 fraction bits, so they run from −8 to just under 8 in steps of 1/4096. On SPI they are sent little endian.
 
-![S3.12 bit layout, the range from −8 to just under 8 with clipping, and rounding to the nearest 1/4096 step](images/number_format.png)
+![S3.12 number format](images/number_format.png)
 
 ### Accuracy
 
 Measured on the RTL over every possible input (all 65,536 for one-operand functions, all 2³² pairs for two-operand ones).
 
-![Worst-case error per function: CORDIC functions 0.8 to 1.2 steps, mul, div and sqrt half a step](images/accuracy.png)
+![Worst-case error per function](images/accuracy.png)
 
 exp and hypot are measured relative to the result. Large results carry a larger absolute error (exp up to 4.9 steps, hypot up to 2.5), because the input has only 12 fraction bits.
 
