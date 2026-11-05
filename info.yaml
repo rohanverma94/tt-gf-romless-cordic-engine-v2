@@ -8,9 +8,9 @@ project:
   clock_hz:     25000000
 
   # GF26c (gf180mcuD, 7-track cells at 3.3 V). GUARD = 4, FUNCS = 1, SPI_SCLK = 0
-  # (the defaults in src/project.v): ~230k um^2 of cells before placement
-  # (tools/sta.sh). 4x2 = 1440 x 325 um (469k um^2), ~49 % before buffering and CTS;
-  # 3x2 (350k um^2) would be ~66 %, above the 60 % density target.
+  # (the defaults in src/project.v): ~345k um^2 of cells before placement.
+  # 3x4 = 1076 x 737 um (793k um^2); the layout fills about 58 % after buffering
+  # and clock tree.
   tiles: "3x4"
 
   top_module:  "tt_um_xcordic"
