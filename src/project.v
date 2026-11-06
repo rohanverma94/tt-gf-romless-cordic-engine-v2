@@ -59,7 +59,7 @@ module tt_um_xcordic #(
     wire [6:0]  f_funct7;
     wire [2:0]  f_funct3;
     wire [31:0] f_rs1, f_rs2, f_rd;
-    wire [1:0]  f_flags, c_flags;           // {INV, SAT} (v1.0)
+    wire [1:0]  f_flags, c_flags;           // {INV, SAT}
     wire        c_start, c_busy, c_done;
     wire [6:0]  c_funct7;
     wire [2:0]  c_funct3;

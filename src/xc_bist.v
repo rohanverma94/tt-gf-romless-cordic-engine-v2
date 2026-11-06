@@ -10,13 +10,19 @@
 // a 32-bit Galois LFSR (mask 0x80200003, stepped once for rs1 and once for
 // rs2), and folds every rd into a 32-bit MISR (same mask, starts at
 // 0xFFFFFFFF):  misr = (misr >> 1 ^ (misr[0] ? 0x80200003 : 0)) ^ rd ^ flags << 30
-// (v1.0: the result flags {INV, SAT} go into bits 31:30).
+// (the result flags {INV, SAT} go into bits 31:30).
 // The core's cfg registers are used as they are (reset values after reset).
 // host/pico_harness/xc_model.hpp computes the same signature (Model::exec).
 //
 // Contract to the instruction source: the core's own (start accepted when
 // !busy; busy from the next cycle; done pulses as busy falls, at least 2
 // busy cycles later). Proof: formal/props/xc_bist_props.vh (F5).
+//
+// Done, rd and flags to the instruction source come from registers, one
+// cycle after the core's (or the self-test's) done; busy stays high for that
+// cycle, so the contract holds with one cycle more latency. In the earlier layout
+// the self-test state -> done/rd mux -> the frame's output-queue write was
+// 2.7 ns short at the slow corner.
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -34,7 +40,7 @@ module xc_bist #(
     output wire        u_busy,
     output wire        u_done,
     output wire [31:0] u_rd,
-    output wire [1:0]  u_flags,             // {INV, SAT} (v1.0)
+    output wire [1:0]  u_flags,             // {INV, SAT}
     // core
     output wire        c_start,
     output wire [6:0]  c_funct7,
@@ -72,10 +78,21 @@ module xc_bist #(
     assign c_funct3 = active ? bop[2:0]          : u_funct3;
     assign c_rs1    = active ? brs1 : u_rs1;
     assign c_rs2    = active ? brs2 : u_rs2;
-    assign u_busy   = c_busy || active;
-    assign u_done   = bdone || (c_done && !active);
-    assign u_rd     = bdone ? misr : c_rd;
-    assign u_flags  = bdone ? 2'b00 : c_flags;
+    wire        done_c  = bdone || (c_done && !active);
+    reg         done_q;
+    reg  [31:0] rd_q;
+    reg  [1:0]  flags_q;
+    always @(posedge clk) begin
+        if (!rst_n) begin done_q <= 1'b0; rd_q <= 32'd0; flags_q <= 2'd0; end
+        else begin
+            done_q <= done_c;
+            if (done_c) begin rd_q <= bdone ? misr : c_rd; flags_q <= bdone ? 2'b00 : c_flags; end
+        end
+    end
+    assign u_busy   = c_busy || active || done_c;
+    assign u_done   = done_q;
+    assign u_rd     = rd_q;
+    assign u_flags  = flags_q;
 
     wire [31:0] l1 = lstep(lfsr);
     wire [31:0] l2 = lstep(l1);
@@ -111,7 +128,7 @@ module xc_bist #(
                 end
             end
             B_RUN: if (c_done && !bstart) begin
-                misr <= lstep(misr) ^ c_rd ^ {c_flags, 30'd0};   // v1.0: flags too
+                misr <= lstep(misr) ^ c_rd ^ {c_flags, 30'd0};   // flags too
                 bk   <= bk + 16'd1;
                 bop  <= (bop == 5'd6) ? ((FUNCS != 0) ? 5'd8 : 5'd0) :
                         (bop == LAST) ? 5'd0 : bop + 5'd1;

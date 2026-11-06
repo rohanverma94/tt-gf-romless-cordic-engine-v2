@@ -1,4 +1,4 @@
-// xc_exact.v — exact mul, div and sqrt for Xcordic (v1.0)
+// xc_exact.v — exact mul, div and sqrt for Xcordic
 //
 // One small sequential unit with a single 20-bit adder/subtractor, one bit
 // per cycle: shift-add multiply (16 steps), restoring divide (17 steps),

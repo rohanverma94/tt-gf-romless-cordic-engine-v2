@@ -17,7 +17,7 @@
 //         CMD = {EXEC, 2'b00, op[4:0]},  op = funct7 * 8 + funct3 (0..19; 20 = bist)
 //         a frame shorter than 9 bytes leaves the missing bytes 0; EXEC needs >= 5
 //   MISO: STATUS, RD[7:0], RD[15:8], RD[23:16], RD[31:24], FLAGS, then 0
-//         FLAGS = {6'b0, INV, SAT} of the result in RD (v1.0): SAT = the result
+//         FLAGS = {6'b0, INV, SAT} of the result in RD: SAT = the result
 //         (either half of a pair) was clipped to [-8, 8); INV = invalid argument
 //         (div by 0, ln of a <= 0, sqrt of a < 0)
 //         STATUS = {SEQ[3:0], FULL, ERR, VALID, BUSY}, sampled when CS falls:
@@ -35,7 +35,7 @@
 //   a read in between works exactly as before; reading a result and queuing
 //   the next instruction can share one frame.
 //   DATA_READY: every queued instruction has finished (and at least one has
-//   finished since reset), as in v0.8; a result may or may not still be
+//   finished since reset), as before; a result may or may not still be
 //   unread (VALID tells).
 //
 // The protocol is selected by the PROTO pin; it is taken over only while no
@@ -68,7 +68,7 @@ module xc_frame #(
     input  wire        c_busy,
     input  wire        c_done,
     input  wire [31:0] c_rd,
-    input  wire [1:0]  c_flags,              // {INV, SAT} with c_rd (v1.0)
+    input  wire [1:0]  c_flags,              // {INV, SAT} with c_rd
     // pins
     output wire        data_ready,
     output wire        busy
@@ -103,7 +103,7 @@ module xc_frame #(
     reg [7:0]  ccmd;
     reg [31:0] crs1, crs2;
     reg [31:0] crd;                         // last completed result
-    reg [1:0]  cflg;                        // ... and its flags (v1.0)
+    reg [1:0]  cflg;                        // ... and its flags
     reg        cerr;
     reg [3:0]  cseq;                        // completions (mod 16)
     reg        cexec;                       // the core is running a command-mode instruction
@@ -111,7 +111,7 @@ module xc_frame #(
     reg [47:0] csnap;                       // {FLAGS, RD, STATUS} as seen by this frame
     reg        cfv;                         // VALID in this frame's snapshot
     reg        cany;                        // an instruction has finished since reset
-    // input queue {op, rs1, rs2} and output queue {flags, seq, rd}, 4 deep (v0.9; flags v1.0)
+    // input queue {op, rs1, rs2} and output queue {flags, seq, rd}, 4 deep
     reg [68:0] iq_m [0:3];
     reg [1:0]  iq_w, iq_r;
     reg [2:0]  iq_n;

@@ -1,6 +1,6 @@
 // xcordic_core.v — Xcordic instruction unit on the ttsky25a CORDIC datapath
 //
-// v0.3: native functions. The core sequences one to three engine passes per
+// Native functions. The core sequences one to three engine passes per
 // instruction and does the range reduction itself, so sin, cos, tan, atan2,
 // hypot, exp, ln, sqrt, mul, div and tanh are each a single instruction over
 // their full S3.12 domain.
@@ -9,10 +9,10 @@
 // bits: W = 16 + GUARD bit registers, values S3.F with F = 12 + GUARD, and
 // N_PE = 13 + (GUARD+1)/2 iterations. Operands enter as S3.12 shifted up by
 // GUARD; every result is rounded (half up) back to S3.12 and saturated.
-//   GUARD = 0  the ttsky25a datapath, bit-exact with v0.5 and with silicon
+//   GUARD = 0  the ttsky25a datapath, bit-exact with silicon
 //   GUARD = 4  20-bit datapath, 15 circular / 17 linear iterations:
 //              sin/cos/ln ~1.2 LSB worst case (exhaustive, formal/run.sh t3)
-// Two algorithm refinements apply only when GUARD > 0 (GUARD = 0 keeps v0.5):
+// Two algorithm refinements apply only when GUARD > 0 (GUARD = 0 keeps the original algorithm):
 //   - linear passes run F+1 iterations, down to the 1-LSB step
 //   - tanh reduces -2|t| over [-16, 0] instead of saturating it at -8
 // The ISA does not change. cfg registers are W bits wide (values S3.F).
@@ -37,17 +37,17 @@
 // mac keeps its rounded linear-rotation pass (D_MUL).
 //
 // mul, div and sqrt run on xc_exact.v, a sequential unit (one adder,
-// one bit per cycle) that replaces the v0.9 array multiplier and the CORDIC
+// one bit per cycle) that replaces an array multiplier and the CORDIC
 // div / sqrt sequences: every result is the exact value rounded half up and
 // saturated (|error| <= 0.5 LSB), at any GUARD. Every instruction also
 // returns flags = {INV, SAT}: SAT = a result (either half of a pair) was
 // clipped to [-8, 8); INV = invalid argument (div by 0, ln of a <= 0,
-// sqrt of a < 0). Slow-corner timing (paths from the v0.9 layout): the
+// sqrt of a < 0). Slow-corner timing (paths from an earlier layout): the
 // normalization lanes' shifted values and the quadrant-mapped sin / cos are
 // registered in the capture cycles, and the scaler rounds after its shift.
 // Results of every other instruction are unchanged (F3).
 //
-// funct7 = 0  base passes (v0.2)            funct7 = 1  functions
+// funct7 = 0  base passes                   funct7 = 1  functions
 //   000 rot     {y,x}, th  -> K*{y',x'}       000 sin    a        -> sin a
 //   001 sincos  th         -> {sin, cos}      001 cos    a        -> cos a
 //   010 vec     {y,x}      -> {atan2, K|v|}   010 tan    a        -> tan a
@@ -63,14 +63,30 @@
 //
 // Scalar operands are rs1[15:0] / rs2[15:0]; scalar results are sign-extended.
 // Results saturate to [-8, 8). ln/sqrt of an invalid argument return 0x8000.
-// sqrt, mul and div (v1.0) are exact: rounded half up, |error| <= 0.5 LSB
+// sqrt, mul and div are exact: rounded half up, |error| <= 0.5 LSB
 // (xc_exact.v); div by 0 returns 0 (0/0) or 0x7FFF / 0x8000 by the sign of a.
-// flags = {INV, SAT} with every result (v1.0).
+// flags = {INV, SAT} with every result.
+//
+// For the gf180mcu slow corner at 25 MHz: one more capture cycle in
+// front of each pass setup (S_PRE1 after S_PREP, S_MID1 after S_MIDP). The
+// capture cycle registers the raw operands (lane values, the angle before
+// wrapping, the exp/tanh argument, cosh + sinh); the new cycle forms what the
+// first capture formed from them (the lanes' normalization shifts, the wrapped
+// and quadrant-mapped angle, exp's k, the scaler input). In the earlier layout
+// these chains (o_y -> lane -> |v| -> leading one -> shift) were 4 ns short.
+// Results unchanged; each pass setup takes one cycle more (F3).
+// cfg likewise takes its register access out of the accepting cycle (S_CFG):
+// the selector and value come from op_rs1 / op_rs2, not straight from the
+// self-test's instruction mux (4 ns short in the earlier layout). cfg now keeps
+// busy high for one cycle, and done pulses one cycle later.
+// The final results' rounding moves into S_MIDS too: S_MID picks registered
+// rounded values (and their SAT bits) instead of rounding the engine outputs
+// on the way into rd (in the earlier layout, o_z / k*ln2 -> round -> rd was 1 ns short).
 `timescale 1ns/1ps
 `default_nettype none
 
 module xcordic_core #(
-    parameter FUNCS = 1,       // 0: base passes only (v0.2 subset, smallest)
+    parameter FUNCS = 1,       // 0: base passes only (base subset, smallest)
     parameter GUARD = 0        // extra fraction bits, 0..4 (0 = ttsky25a datapath)
 )(
     input  wire        clk,
@@ -83,7 +99,7 @@ module xcordic_core #(
     output reg         busy,
     output reg         done,       // 1-cycle pulse, rd valid
     output reg  [31:0] rd,
-    output reg  [1:0]  flags       // {INV, SAT}, valid with rd (v1.0)
+    output reg  [1:0]  flags       // {INV, SAT}, valid with rd
 );
     localparam integer W = 16 + GUARD;          // datapath width
     localparam integer F = 12 + GUARD;          // fraction bits
@@ -164,7 +180,7 @@ module xcordic_core #(
             rnd = (r > 32767) ? SAT_MAX : (r < -32768) ? SAT_MIN : r[15:0];
         end
     endfunction
-    // ... and whether that saturated (the SAT flag, v1.0)
+    // ... and whether that saturated (the SAT flag)
     function rnd_s(input signed [W+3:0] v);
         reg signed [W+3:0] r;
         begin
@@ -198,9 +214,9 @@ module xcordic_core #(
     reg [W-1:0] r_atan0, r_atan1, r_kc, r_atanh1, r_kh;
 
     reg [4:0]  op;
-    // v1.1: op decoded one-hot in the accepting cycle. Every op-dependent select
+    // Op decoded one-hot in the accepting cycle. Every op-dependent select
     // (capture muxes, engine launch operands, the finish mux) uses its own bit:
-    // in the v1.0 layout the few op bits fed every decoder and their buffer
+    // in an earlier layout the few op bits fed every decoder and their buffer
     // trees set the slow corner (op -> e_z, -9.9 ns). oh == 1 << op while busy.
     reg [19:0] oh;
     reg [31:0] op_rs1, op_rs2;
@@ -213,9 +229,11 @@ module xcordic_core #(
 
     // S_PREP/S_PRE2 precede S_PRE, S_MIDP/S_MIDS precede S_MID: capture, then
     // scale (the shared scaler's shift and rounding get a cycle of their own).
-    // S_XRUN: mul, div or sqrt on the exact unit (v1.0).
+    // S_XRUN: mul, div or sqrt on the exact unit.
     localparam [3:0] S_IDLE = 0, S_PRE = 1, S_RUN = 2, S_MID = 3, S_DONE = 4,
-                     S_PREP = 5, S_MIDP = 6, S_PRE2 = 7, S_MIDS = 8, S_XRUN = 9;
+                     S_PREP = 5, S_MIDP = 6, S_PRE2 = 7, S_MIDS = 8, S_XRUN = 9,
+                     S_PRE1 = 10, S_MID1 = 11,       // S_PREP -> S_PRE1 -> S_PRE2, S_MIDP -> S_MID1 -> S_MIDS
+                     S_CFG = 12;                     // cfg reads and writes from the registered operands
     reg        sat2;                     // rotc: the first half (x') saturated
 
     // pipeline registers, loaded in S_PREP / S_MIDP from the same inputs the
@@ -230,8 +248,14 @@ module xcordic_core #(
     reg  signed [W+1:0] q_scv;           // scaler input value  (S_PREP / S_MIDP)
     reg  signed [6:0]   q_sce;           // scaler exponent     (S_PREP / S_MIDP)
     reg  signed [W+5:0] q_kl;            // k * ln2             (S_PRE2 / S_MIDS)
-    reg  signed [W-1:0] q_van, q_vbn;    // the lanes' shifted values (S_PRE2 / S_MIDS, v1.0)
-    reg  signed [W-1:0] q_psin, q_pcos;  // quadrant-mapped sin, cos (S_MIDP, v1.0)
+    reg  signed [W-1:0] q_van, q_vbn;    // the lanes' shifted values (S_PRE2 / S_MIDS)
+    reg  signed [W-1:0] q_psin, q_pcos;  // quadrant-mapped sin, cos (S_MIDP)
+    reg  signed [W-1:0] q_th0;           // the angle operand before wrapping (S_PREP / S_MIDP)
+    reg  signed [W:0]   q_hsum;          // cosh + sinh (S_PREP / S_MIDP)
+    reg  signed [W+5:0] q_kl2;           // k * ln2 for ln's result (S_MID1)
+    // rounded results and their SAT bits (S_MIDS)
+    reg  signed [15:0]  q_rx, q_ry, q_rz, q_rs, q_rc, q_rl;
+    reg                 q_sx, q_sy, q_sz, q_ss, q_sc_, q_sl;
     reg [3:0] state;
 
     // ---------------- operand fields (S3.12) ----------------
@@ -254,7 +278,7 @@ module xcordic_core #(
         .o_x(o_x), .o_y(o_y), .o_z(o_z), .o_busy(e_busy), .o_done(e_done)
     );
 
-    // ---------------- exact unit: mul, div, sqrt (v1.0) ----------------
+    // ---------------- exact unit: mul, div, sqrt ----------------
     // started in the accepting cycle with the operands as they arrive, so it
     // keeps copies of its own (op_rs1 does not feed it)
     wire [4:0]  in_op   = {(FUNCS != 0) ? funct7[1:0] : 2'b00, funct3};
@@ -283,8 +307,9 @@ module xcordic_core #(
 
     // ---------------- circular rotation pre-processing ----------------
     wire signed [W-1:0] th0 = up((oh[OP_ROT] || oh[OP_ROTC]) ? f_z : f_lo);
-    wire signed [W-1:0] th  = th0[W-1]          ? th0 + C_TWO_PI :
-                              (th0 >= C_TWO_PI) ? th0 - C_TWO_PI : th0;
+    // Wrapped and mapped from the captured operand, in S_PRE1 / S_MID1
+    wire signed [W-1:0] th  = q_th0[W-1]          ? q_th0 + C_TWO_PI :
+                              (q_th0 >= C_TWO_PI) ? q_th0 - C_TWO_PI : q_th0;
     wire signed [W-1:0] diff1 = th - C_HALF_PI;
     wire signed [W-1:0] diff2 = th - C_PI;
     wire signed [W-1:0] diff3 = th - C_THREE_HALF_PI;
@@ -311,7 +336,7 @@ module xcordic_core #(
         endcase
     end
 
-    // ---------------- full-range divide a / b (tan, tanh; div: v1.0 exact unit) ----------------
+    // ---------------- full-range divide a / b (tan, tanh; div: exact unit) ----------------
     wire signed [W-1:0] da = oh[OP_TAN] ? p_sin : ONE - t_a;
     wire signed [W-1:0] db = oh[OP_TAN] ? p_cos : ONE + t_a;
 
@@ -320,9 +345,10 @@ module xcordic_core #(
     wire pair = oh[OP_ATAN2] || oh[OP_HYPOT] || oh[OP_ROTC];
     wire signed [W-1:0] va = pair ? px : da;
     wire signed [W-1:0] vb = pair ? py : db;
-    wire signed [5:0] n_a = nshift(absw(va) | (pair ? absw(vb) : {(W+1){1'b0}}));
-    wire signed [5:0] n_b = pair ? n_a : nshift(absw(vb));
-    // shifted in the cycle after the capture (S_PRE2 / S_MIDS), registered (v1.0)
+    // From the captured lane values, in S_PRE1 / S_MID1
+    wire signed [5:0] n_a = nshift(absw(q_va) | (pair ? absw(q_vb) : {(W+1){1'b0}}));
+    wire signed [5:0] n_b = pair ? n_a : nshift(absw(q_vb));
+    // shifted in the cycle after the capture (S_PRE2 / S_MIDS), registered
     wire signed [W-1:0] van = q_van;
     wire signed [W-1:0] vbn = q_vbn;
     wire signed [5:0]   p_sh = q_na, d_sa = q_na, d_sb = q_nb;
@@ -335,7 +361,7 @@ module xcordic_core #(
 
     // ---------------- exp / tanh argument reduction ----------------
     // x_t is S5.12: exp's argument, or tanh's -2|t|. GUARD = 0 saturates -2|t|
-    // to S3.12 (v0.5); GUARD > 0 keeps the full range [-16, 0].
+    // to S3.12; GUARD > 0 keeps the full range [-16, 0].
     wire signed [16:0] th_absv = f_lo[15] ? -{f_lo[15], f_lo} : {f_lo[15], f_lo};
     wire signed [15:0] th_a   = (th_absv > 17'sd32767) ? SAT_MAX : th_absv[15:0];
     wire signed [17:0] th_u2  = -{th_a[15], th_a, 1'b0};
@@ -343,21 +369,21 @@ module xcordic_core #(
     wire signed [17:0] th_u18 = -{th_absv, 1'b0};
     wire signed [17:0] x_t    = !oh[OP_TANH] ? {{2{f_lo[15]}}, f_lo} :
                                 (GUARD > 0)     ? th_u18 : {{2{th_u[15]}}, th_u};
-    wire signed [5:0]  x_k    = exp_k(x_t);
+    wire signed [5:0]  x_k    = exp_k(q_xt[17:0]);      // from the captured argument, in S_PRE1
     wire signed [W+5:0] kl_c  = kln2((state == S_PRE2) ? q_xk : kexp); // k*ln2, registered as q_kl
     wire signed [W+5:0] kl    = q_kl;
     wire signed [W+5:0] x_up  = q_xt;
     wire signed [W+5:0] x_rw  = (x_up <<< GUARD) - kl;
     wire signed [W-1:0] x_r   = x_rw[W-1:0];
 
-    // ---------------- ln mantissa (sqrt: v1.0 exact unit) ----------------
+    // ---------------- ln mantissa (sqrt: exact unit) ----------------
     wire [4:0]         a_msb  = msbw({{(W-15){1'b0}}, f_lo});
     wire signed [5:0]  ln_e   = $signed({1'b0, a_msb}) - 6'sd12;
     wire signed [5:0]  m_sh_c = ln_e;                                          // at capture
 
     // ---------------- final results ----------------
     wire signed [W:0]   hsum   = {o_x[W-1], o_x} + {o_y[W-1], o_y};      // cosh + sinh
-    wire signed [W+3:0] ln_sum = {{3{o_z[W-1]}}, o_z, 1'b0} + kl[W+3:0];
+    wire signed [W+3:0] ln_sum2 = {{3{o_z[W-1]}}, o_z, 1'b0} + q_kl2[W+3:0];   // rounded in S_MIDS
 
     // ---------------- shared scaler: v * 2^k, round half up, saturate ----------------
     // sc_v is S3.F. Intermediate values (ln/sqrt mantissa, tanh's E) stay S3.F
@@ -365,33 +391,47 @@ module xcordic_core #(
     localparam integer SCW = W + 26;
     reg  signed [W+1:0] sc_v;
     reg  signed [5:0]   sc_k;
-    always @* begin                    // scaler input, captured in S_PREP / S_MIDP
+    always @* begin                    // scaler input, registered in S_PRE1 / S_MID1
         sc_k = kexp;
-        if (state == S_PREP) begin
+        if (state == S_PRE1) begin
             sc_v = {{2{f_lo[15]}}, up(f_lo)};  sc_k = -m_sh_c;        // ln mantissa
         end else (* parallel_case *) case (1'b1)
-            oh[OP_EXP]:                    sc_v = {hsum[W], hsum};
-            oh[OP_TANH]:                   sc_v = (pass == 1) ? {hsum[W], hsum} : {{2{o_z[W-1]}}, o_z};
+            oh[OP_EXP]:                    sc_v = {q_hsum[W], q_hsum};
+            oh[OP_TANH]:                   sc_v = (pass == 1) ? {q_hsum[W], q_hsum} : {{2{o_z[W-1]}}, o_z};
             oh[OP_TAN]:                    sc_v = {{2{o_z[W-1]}}, o_z};
             oh[OP_ROTC]:                   sc_v = (pass == 3) ? {{2{t_b[W-1]}}, t_b} : {{2{o_y[W-1]}}, o_y};
             default:                   sc_v = {{2{o_y[W-1]}}, o_y};    // hypot
         endcase
     end
-    wire               sc_mid = (state == S_PREP) || (oh[OP_TANH] && pass == 1);
+    wire               sc_mid = (state == S_PRE1) || (oh[OP_TANH] && pass == 1);
     wire signed [6:0]  sc_e   = {sc_k[5], sc_k} - (sc_mid ? 7'sd0 : $signed(GUARD[6:0]));
     // shift and round from the captured input (S_PRE2 / S_MIDS), into q_sc.
-    // v1.0: a right shift by n rounds as ((v >> (n-1)) + 1) >> 1, which equals
+    // A right shift by n rounds as ((v >> (n-1)) + 1) >> 1, which equals
     // (v + 2^(n-1)) >> n: the add is a constant increment after the shift.
     wire signed [SCW-1:0] sc_w = {{(SCW-W-2){q_scv[W+1]}}, q_scv};
     wire signed [SCW-1:0] sc_h = sc_w >>> (-q_sce - 7'sd1);
     wire signed [SCW-1:0] sc_i = sc_h + {{(SCW-1){1'b0}}, 1'b1};
     wire signed [SCW-1:0] sc_r = !q_sce[6] ? (sc_w <<< q_sce) : (sc_i >>> 1);
     reg  signed [SCW-1:0] q_sc;
-    // saturate (S_PRE / S_MID)
-    wire               sc_sat = (q_sc > 32767) || (q_sc < -32768);
-    wire signed [15:0]  sc_out = (q_sc > 32767) ? SAT_MAX : (q_sc < -32768) ? SAT_MIN : q_sc[15:0];
-    wire signed [W-1:0] sc_wid = (q_sc > ((1 << (W-1)) - 1)) ? {1'b0, {(W-1){1'b1}}} :
-                                 (q_sc < -(1 << (W-1)))      ? {1'b1, {(W-1){1'b0}}} : q_sc[W-1:0];
+    // saturate (S_PRE / S_MID). The range tests as sign and bit reductions
+    // (v > 2^15-1 <=> v >= 0 and a bit above bit 14 is set; v < -2^15 <=> v < 0
+    // and a bit above bit 14 is clear), the same tests as the comparisons.
+    wire               sc_neg = q_sc[SCW-1];
+    wire               sc_hi  = !sc_neg && (|q_sc[SCW-2:15]);      // > 32767
+    wire               sc_lo  =  sc_neg && !(&q_sc[SCW-2:15]);     // < -32768
+    wire               sc_whi = !sc_neg && (|q_sc[SCW-2:W-1]);     // > 2^(W-1) - 1
+    wire               sc_wlo =  sc_neg && !(&q_sc[SCW-2:W-1]);    // < -2^(W-1)
+    wire               sc_sat = sc_hi || sc_lo;
+    wire signed [15:0]  sc_out = sc_hi ? SAT_MAX : sc_lo ? SAT_MIN : q_sc[15:0];
+    wire signed [W-1:0] sc_wid = sc_whi ? {1'b0, {(W-1){1'b1}}} :
+                                 sc_wlo ? {1'b1, {(W-1){1'b0}}} : q_sc[W-1:0];
+    // -sc_out, 16 bits (tanh's sign), with a prefix adder
+    wire [15:0] sc_outn;
+    xc_add #(.W(16)) u_scn (.a(~sc_out), .b(16'd0), .ci(1'b1), .s(sc_outn));
+    // -vx, -vy for the vectoring launch, with prefix adders
+    wire [W-1:0] vxn, vyn;
+    xc_add #(.W(W)) u_vxn (.a(~vx), .b({W{1'b0}}), .ci(1'b1), .s(vxn));
+    xc_add #(.W(W)) u_vyn (.a(~vy), .b({W{1'b0}}), .ci(1'b1), .s(vyn));
     wire signed [W-1:0] m_val  = sc_wid;
 
     function [31:0] sx(input [15:0] v);
@@ -401,7 +441,7 @@ module xcordic_core #(
     // ---------------- cfg register file ----------------
     reg [W-1:0] cfg_old;
     always @* begin
-        case (rs2[2:0])
+        case (op_rs2[2:0])                 // in S_CFG
             3'd0: cfg_old = r_atan0;
             3'd1: cfg_old = r_atan1;
             3'd2: cfg_old = r_kc;
@@ -441,7 +481,7 @@ module xcordic_core #(
 
     task launch_vec;
         begin
-            launch(M_CIRC, D_VEC, v_flip ? -vx : vx, v_flip ? -vy : vy,
+            launch(M_CIRC, D_VEC, v_flip ? vxn : vx, v_flip ? vyn : vy,
                    v_flip ? (vy[W-1] ? -C_PI : C_PI) : {W{1'b0}});
         end
     endtask
@@ -460,12 +500,25 @@ module xcordic_core #(
 
     always @(posedge clk)
         if (state == S_PREP || state == S_MIDP) begin
-            q_va <= va;  q_vb <= vb;  q_na <= n_a;  q_nb <= n_b;
-            q_quad <= w_quadrant;  q_thm <= th_mapped;
-            q_xt <= x_t;  q_xk <= x_k;  q_lne <= ln_e;
-            q_scv <= sc_v;  q_sce <= sc_e;
+            q_va <= va;  q_vb <= vb;
+            q_th0 <= th0;  q_hsum <= hsum;
+            q_xt <= x_t;  q_lne <= ln_e;
             if (state == S_MIDP) begin q_psin <= p_sin;  q_pcos <= p_cos; end
+        end else if (state == S_PRE1 || state == S_MID1) begin
+            if (state == S_MID1) q_kl2 <= kl_c;
+            q_na <= n_a;  q_nb <= n_b;
+            q_quad <= w_quadrant;  q_thm <= th_mapped;
+            q_xk <= x_k;
+            q_scv <= sc_v;  q_sce <= sc_e;
         end else if (state == S_PRE2 || state == S_MIDS) begin
+            if (state == S_MIDS) begin
+                q_rx <= rnd(o_x);     q_sx <= rnd_s(o_x);
+                q_ry <= rnd(o_y);     q_sy <= rnd_s(o_y);
+                q_rz <= rnd(o_z);     q_sz <= rnd_s(o_z);
+                q_rs <= rnd(q_psin);  q_ss <= rnd_s(q_psin);
+                q_rc <= rnd(q_pcos);  q_sc_ <= rnd_s(q_pcos);
+                q_rl <= rnd(ln_sum2); q_sl <= rnd_s(ln_sum2);
+            end
             q_sc <= sc_r;  q_kl <= kl_c;
             q_van <= shl(q_va, q_na);  q_vbn <= shl(q_vb, q_nb);
         end
@@ -493,29 +546,39 @@ module xcordic_core #(
                 pass <= 0;
                 zero_vec <= 1'b0;
                 if (funct7 == 7'd0 && funct3 == 3'd7) begin
-                    rd <= {{(32-W){1'b0}}, cfg_old};
-                    flags <= 2'b00;
-                    if (!rs2[3]) case (rs2[2:0])
-                        3'd0: r_atan0 <= rs1[W-1:0];
-                        3'd1: r_atan1 <= rs1[W-1:0];
-                        3'd2: r_kc <= rs1[W-1:0];
-                        3'd3: r_atanh1 <= rs1[W-1:0];
-                        3'd4: r_kh <= rs1[W-1:0];
-                        default: ;
-                    endcase
-                    done <= 1'b1;
+                    busy <= 1'b1;
+                    state <= S_CFG;
                 end else begin
                     busy <= 1'b1;
                     state <= in_xop ? S_XRUN : S_PREP;       // x_start pulses in this cycle
                 end
             end
 
-            S_PREP: state <= S_PRE2;
+            // ---------------- cfg (from the registered operands) ----------------
+            S_CFG: begin
+                rd <= {{(32-W){1'b0}}, cfg_old};
+                flags <= 2'b00;
+                if (!op_rs2[3]) case (op_rs2[2:0])
+                    3'd0: r_atan0 <= op_rs1[W-1:0];
+                    3'd1: r_atan1 <= op_rs1[W-1:0];
+                    3'd2: r_kc <= op_rs1[W-1:0];
+                    3'd3: r_atanh1 <= op_rs1[W-1:0];
+                    3'd4: r_kh <= op_rs1[W-1:0];
+                    default: ;
+                endcase
+                busy <= 1'b0;
+                done <= 1'b1;
+                state <= S_IDLE;
+            end
+
+            S_PREP: state <= S_PRE1;
+            S_PRE1: state <= S_PRE2;
             S_PRE2: state <= S_PRE;
-            S_MIDP: state <= S_MIDS;
+            S_MIDP: state <= S_MID1;
+            S_MID1: state <= S_MIDS;
             S_MIDS: state <= S_MID;
 
-            // ---------------- mul, div, sqrt (v1.0) ----------------
+            // ---------------- mul, div, sqrt ----------------
             S_XRUN: if (x_done) finish(sx(x_rd), x_flags);
 
             // ---------------- first pass ----------------
@@ -571,25 +634,26 @@ module xcordic_core #(
             // ---------------- between passes / final ----------------
             // (q_psin, q_pcos: the quadrant-mapped p_sin, p_cos, captured in S_MIDP)
             S_MID: (* parallel_case *) case (1'b1)
-                oh[OP_ROT], oh[OP_SC]:   finish({rnd(q_psin), rnd(q_pcos)}, {1'b0, rnd_s(q_psin) || rnd_s(q_pcos)});
-                oh[OP_VEC], oh[OP_HVEC]: finish(zero_vec ? 32'd0 : {rnd(o_z), rnd(o_x)},
-                                        {1'b0, !zero_vec && (rnd_s(o_z) || rnd_s(o_x))});
-                oh[OP_MAC]:          finish(sx(rnd(o_y)), {1'b0, rnd_s(o_y)});
-                oh[OP_LDIV]:         finish(sx(rnd(o_z)), {1'b0, rnd_s(o_z)});
-                oh[OP_HSC]:          finish({rnd(o_y), rnd(o_x)}, {1'b0, rnd_s(o_y) || rnd_s(o_x)});
-                oh[OP_SIN]:          finish(sx(rnd(q_psin)), {1'b0, rnd_s(q_psin)});
-                oh[OP_COS]:          finish(sx(rnd(q_pcos)), {1'b0, rnd_s(q_pcos)});
+                // (q_r*, q_s*: rnd() and rnd_s() of o_x, o_y, o_z, q_psin, q_pcos, ln's sum, from S_MIDS)
+                oh[OP_ROT], oh[OP_SC]:   finish({q_rs, q_rc}, {1'b0, q_ss || q_sc_});
+                oh[OP_VEC], oh[OP_HVEC]: finish(zero_vec ? 32'd0 : {q_rz, q_rx},
+                                        {1'b0, !zero_vec && (q_sz || q_sx)});
+                oh[OP_MAC]:          finish(sx(q_ry), {1'b0, q_sy});
+                oh[OP_LDIV]:         finish(sx(q_rz), {1'b0, q_sz});
+                oh[OP_HSC]:          finish({q_ry, q_rx}, {1'b0, q_sy || q_sx});
+                oh[OP_SIN]:          finish(sx(q_rs), {1'b0, q_ss});
+                oh[OP_COS]:          finish(sx(q_rc), {1'b0, q_sc_});
                 oh[OP_TAN]: begin
                     if (pass == 1) launch_fdiv;
                     else           finish(sx(sc_out), {1'b0, sc_sat});
                 end
-                oh[OP_ATAN2]:        finish(sx(rnd(o_z)), {1'b0, rnd_s(o_z)});
+                oh[OP_ATAN2]:        finish(sx(q_rz), {1'b0, q_sz});
                 oh[OP_HYPOT]: begin
                     if (pass == 1) launch(M_LIN, D_ROT, o_x, {W{1'b0}}, C_INV_K);
                     else           finish(sx(sc_out), {1'b0, sc_sat});
                 end
                 oh[OP_EXP]:          finish(sx(sc_out), {1'b0, sc_sat});
-                oh[OP_LN]:           finish(sx(rnd(ln_sum)), {1'b0, rnd_s(ln_sum)});
+                oh[OP_LN]:           finish(sx(q_rl), {1'b0, q_sl});
                 oh[OP_TANH]: begin
                     if (pass == 1) begin
                         // E = exp(-2|t|) in S3.F; the fdiv uses (1 - E) / (1 + E) next cycle
@@ -599,7 +663,7 @@ module xcordic_core #(
                     end else if (pass == 2)
                         launch_fdiv;           // S_RUN increments pass to 3
                     else
-                        finish(sx(neg ? -sc_out : sc_out), {1'b0, sc_sat});
+                        finish(sx(neg ? sc_outn : sc_out), {1'b0, sc_sat});
                 end
                 oh[OP_ROTC]: begin
                     if (pass == 1) begin
