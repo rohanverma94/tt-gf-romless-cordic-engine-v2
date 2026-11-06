@@ -17,8 +17,8 @@
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
-  "//": "tt_um_xcordic on gf180mcuD at 3.3 V: 40 ns (25 MHz) closes the slow corner (ss_125C_3v00)",
-  "//": "before layout with the 20-bit GUARD = 4 datapath (tools/sta.sh); the typical corner has ~20 ns to spare.",
+  "//": "tt_um_xcordic on gf180mcuD at 3.3 V, 25 MHz. The design meets it at every slow corner after layout",
+  "//": "with the settings below (with the defaults: -9.4 ns at max_ss_125C_3v00).",
   "CLOCK_PERIOD": 40,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
@@ -26,8 +26,15 @@
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
 
   "RUN_POST_GRT_DESIGN_REPAIR": true,
-  "RUN_POST_GRT_RESIZER_TIMING": false,
-  "PL_RESIZER_SETUP_SLACK_MARGIN": 6.0,
+  "//": "Repair setup timing after placement against a 12 ns margin, and again after global routing",
+  "//": "(in the earlier run the placement estimate was 13 ns optimistic and nothing repaired after routing)",
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "PL_RESIZER_SETUP_SLACK_MARGIN": 12.0,
+  "GRT_RESIZER_SETUP_SLACK_MARGIN": 2.0,
+  "//": "Delay-driven mapping against the slow-corner library, with ABC building the fanout trees",
+  "SYNTH_STRATEGY": "DELAY 1",
+  "SYNTH_CORNER": "nom_ss_125C_3v00",
+  "SYNTH_ABC_BUFFERING": true,
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 20,
   "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 20,
   "EXTRA_EXCLUDED_CELLS": ["gf180mcu_fd_sc_mcu7t5v0__dly*"],

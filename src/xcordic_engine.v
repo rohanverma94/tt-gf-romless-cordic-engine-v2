@@ -23,6 +23,18 @@
 // The shift is formed two iterations ahead (n_s, with 3s and 5s), so
 // the angle for the next iteration comes from registers through
 // xcordic_aval only; iteration 0 is a plain select. Outputs unchanged (F2).
+//
+// For the gf180mcu slow corner at 25 MHz (in the earlier layout one
+// iteration, sign -> add/sub select -> 20-bit ripple carry, was 9 ns short):
+//   - x, y and z each compute both x + d and x - d with prefix adders
+//     (xc_add.v) and the direction picks the sum after the adders, so the
+//     sign no longer sits in front of the carry chain;
+//   - the angle generator runs one stage deeper: the shifted series terms of
+//     the next iteration are registered (t_a = 2^-s + x^5/5 + rounding bias,
+//     t_b = x^3/3), formed from a shift held three iterations ahead, so the
+//     angle register is loaded through one add and a select.
+// Every register the run depends on (o_x, o_y, o_z, shift, angle) holds the
+// value it held with the one-stage generator, cycle for cycle (F2).
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -59,36 +71,50 @@ module xcordic_engine #(
     localparam integer N_HYP = N_PE + 1 + ((N_PE >= 14) ? 1 : 0);
     wire [4:0] niter = (mode == M_HYP) ? N_HYP[4:0] : (mode == M_LIN) ? N_LIN[4:0] : N_PE[4:0];
 
-    // angle generator one iteration ahead: at the accepting start it forms
-    // iteration 0 of the new run, while busy iteration iter + 1
-    // v1.1: two iterations ahead for the shift. n_s, n_s3, n_s5 hold the shift
-    // of iteration iter + 1 (and 3x, 5x it) while busy, so the angle for that
-    // iteration is formed from registers only; the shift itself is formed one
-    // cycle earlier still, off the angle path. Iteration 0's shift (0, or 1 for
-    // hyperbolic) and angle (atan0, 1 or atanh1) are plain selects. The shift
-    // and angle registers hold exactly what the v1.0 generator gave (F2).
-    wire [4:0] a_s;                              // shift of the iteration after the next
-    xcordic_ashift #(.N_PE(N_PE)) u_ash (
-        .i_mode(o_busy ? mode : i_mode), .i_iter(o_busy ? iter + 5'd2 : 5'd1), .o_shift(a_s));
-    reg  [4:0] n_s;
-    reg  [7:0] n_s3, n_s5;
-    wire [DATA_WIDTH-1:0] v_angle;
-    xcordic_aval #(.DATA_WIDTH(DATA_WIDTH), .GUARD(GUARD)) u_aval (
-        .i_mode(mode), .i_shift(n_s), .i_s3(n_s3), .i_s5(n_s5),
-        .i_atan0(i_atan0), .i_atan1(i_atan1), .i_atanh1(i_atanh1), .o_angle(v_angle));
+    // angle generator. While busy in iteration i:
+    //   shift = shift(i), angle = angle(i)          (used by this iteration)
+    //   n_s = shift(i+1), t_* = terms of shift(i+1)  (angle(i+1) = t_a -/+ t_b)
+    //   n2  = shift(i+2), with 3x and 5x it         (terms of iteration i+2)
+    // At the accepting start: iteration 0's shift and angle are plain selects
+    // (0 or atan0, 1 or 1.0, 1 or atanh1), and iterations 1 and 2 have the
+    // constant shifts (1, 2) circular and linear, (2, 3) hyperbolic.
     localparam integer F_ONE = DATA_WIDTH - 4;
+    localparam integer GX    = (GUARD > 0) ? 4 : 0;          // xcordic_aval's extra fraction bits
+    localparam integer IW    = DATA_WIDTH + GX;
     wire [DATA_WIDTH-1:0] one_f = {{(DATA_WIDTH-1){1'b0}}, 1'b1} << F_ONE;
     wire [4:0]            s0 = (i_mode == M_HYP) ? 5'd1 : 5'd0;
     wire [DATA_WIDTH-1:0] a0 = (i_mode == M_HYP) ? i_atanh1 : (i_mode == M_LIN) ? one_f : i_atan0;
+    wire [4:0]            s1 = (i_mode == M_HYP) ? 5'd2 : 5'd1;
+    wire [4:0]            s2 = (i_mode == M_HYP) ? 5'd3 : 5'd2;
 
-    reg [4:0] shift;                             // for iteration iter
-    reg signed [DATA_WIDTH-1:0] angle;
+    wire [4:0] a_s;                              // shift of iteration iter + 3
+    xcordic_ashift #(.N_PE(N_PE)) u_ash (.i_mode(mode), .i_iter(iter + 5'd3), .o_shift(a_s));
+
+    reg  [4:0] shift, n_s, n2;
+    reg  [7:0] n2_3, n2_5;
+    reg  signed [DATA_WIDTH-1:0] angle;
+    reg  [IW-1:0] t_a, t_b;                      // series terms of shift n_s
+    // the terms of shift n2 (busy) or of s1 (accepting start)
+    wire [4:0] ts  = o_busy ? n2 : s1;
+    wire [7:0] ts3 = o_busy ? n2_3 : 8'd3 * {3'd0, s1};
+    wire [7:0] ts5 = o_busy ? n2_5 : 8'd5 * {3'd0, s1};
+    wire [IW-1:0] w_ta, w_tb;
+    xcordic_aterms #(.DATA_WIDTH(DATA_WIDTH), .GUARD(GUARD)) u_at (
+        .i_shift(ts), .i_s3(ts3), .i_s5(ts5), .o_ta(w_ta), .o_tb(w_tb));
+    wire [DATA_WIDTH-1:0] v_angle;               // angle of shift n_s, from t_a, t_b
+    xcordic_asum #(.DATA_WIDTH(DATA_WIDTH), .GUARD(GUARD)) u_as (
+        .i_mode(mode), .i_shift(n_s), .i_ta(t_a), .i_tb(t_b),
+        .i_atan0(i_atan0), .i_atan1(i_atan1), .i_atanh1(i_atanh1), .o_angle(v_angle));
+
     always @(posedge i_clk) begin
         shift <= o_busy ? n_s : s0;
         angle <= o_busy ? v_angle : a0;
-        n_s  <= a_s;
-        n_s3 <= 8'd3 * {3'd0, a_s};
-        n_s5 <= 8'd5 * {3'd0, a_s};
+        n_s   <= o_busy ? n2 : s1;
+        t_a   <= w_ta;
+        t_b   <= w_tb;
+        n2    <= o_busy ? a_s : s2;
+        n2_3  <= 8'd3 * {3'd0, (o_busy ? a_s : s2)};
+        n2_5  <= 8'd5 * {3'd0, (o_busy ? a_s : s2)};
     end
 
     // sigma = +1 when pos
@@ -100,15 +126,19 @@ module xcordic_engine #(
     wire signed [DATA_WIDTH:0]   xs2 = $signed({o_x, 1'b0}) >>> shift;
     wire signed [DATA_WIDTH-1:0] xs = xs2[DATA_WIDTH:1];
     wire signed [DATA_WIDTH-1:0] ys = o_y >>> shift;
-    // v0.8 linear rotation: rounded shift, hold once z = 0
+    // linear rotation: rounded shift, hold once z = 0
     localparam LROUND = (GUARD > 0);
     wire lin_rot = LROUND && (mode == M_LIN) && (dir == D_MUL);
     wire rbit    = lin_rot && xs2[0];
     wire zhold   = lin_rot && (o_z == {DATA_WIDTH{1'b0}});
-    // y + sigma * (xs + rbit): one adder, rbit is the carry-in
-    wire [DATA_WIDTH-1:0] y_opd = pos ? xs : ~xs;
-    wire                  y_cin = pos ? rbit : ~rbit;
-    wire [DATA_WIDTH-1:0] y_new = o_y + y_opd + {{(DATA_WIDTH-1){1'b0}}, y_cin};
+    // y + sigma * (xs + rbit), rbit the carry-in; both signs, picked after the adders
+    wire [DATA_WIDTH-1:0] y_p, y_m, x_p, x_m, z_p, z_m;
+    xc_add #(.W(DATA_WIDTH)) u_yp (.a(o_y), .b(xs),     .ci(rbit),  .s(y_p));   // y + (xs + rbit)
+    xc_add #(.W(DATA_WIDTH)) u_ym (.a(o_y), .b(~xs),    .ci(~rbit), .s(y_m));   // y - (xs + rbit)
+    xc_add #(.W(DATA_WIDTH)) u_xp (.a(o_x), .b(ys),     .ci(1'b0),  .s(x_p));   // x + ys
+    xc_add #(.W(DATA_WIDTH)) u_xm (.a(o_x), .b(~ys),    .ci(1'b1),  .s(x_m));   // x - ys
+    xc_add #(.W(DATA_WIDTH)) u_zp (.a(o_z), .b(angle),  .ci(1'b0),  .s(z_p));   // z + angle
+    xc_add #(.W(DATA_WIDTH)) u_zm (.a(o_z), .b(~angle), .ci(1'b1),  .s(z_m));   // z - angle
 
     always @(posedge i_clk) begin
         o_done <= 1'b0;
@@ -128,13 +158,13 @@ module xcordic_engine #(
             end
         end else begin
             case (mode)
-                M_CIRC:  o_x <= pos ? o_x - ys : o_x + ys;
-                M_HYP:   o_x <= pos ? o_x + ys : o_x - ys;
+                M_CIRC:  o_x <= pos ? x_m : x_p;
+                M_HYP:   o_x <= pos ? x_p : x_m;
                 default: o_x <= o_x;
             endcase
             if (!zhold) begin
-                o_y <= y_new;
-                o_z <= pos ? o_z - angle : o_z + angle;
+                o_y <= pos ? y_p : y_m;
+                o_z <= pos ? z_m : z_p;
             end
             iter <= iter + 5'd1;
             if (iter == niter - 1) begin
