@@ -26,6 +26,7 @@ project:
     - "xcordic_core.v"
     - "xcordic_engine.v"
     - "xcordic_atan.v"
+    - "xc_add.v"
 pinout:
   # Inputs
   ui[0]: "SCLK"

@@ -167,7 +167,7 @@ Each instruction is one CS frame.
 | 19 | rotc | {y′, x′} = rotate({y, x} = RS1 by θ = RS2), gain removed |
 | 20 | bist | self-test, below |
 
-Operands and results are S3.12 in the low 16 bits; pairs pack two values as {high, low}. CORDIC instructions take up to 72 clocks (2.9 µs at 25 MHz), and mul, div and sqrt take 22–24.
+Operands and results are S3.12 in the low 16 bits; pairs pack two values as {high, low}. CORDIC instructions take up to 78 clocks (3.1 µs at 25 MHz), and mul, div and sqrt take 23–25.
 
 The exact instructions return the true value rounded to the nearest step, ties going up: mul = ⌊a·b/4096 + ½⌋, div = ⌊4096·a/b + ½⌋, sqrt = ⌊√(4096·a) + ½⌋. For example 1/3 → 0x0555, −1/3 → 0xFAAB, √2 → 0x16A1.
 
@@ -175,7 +175,7 @@ The exact instructions return the true value rounded to the nearest step, ties g
 - It runs N instructions, cycling through ops 0–6 and 8–19, on operands from a 32-bit LFSR (polynomial mask `0x80200003`).
 - It folds each result and its flags into a 32-bit signature: `sig = (sig >> 1 ^ (sig & 1 ? 0x80200003 : 0)) ^ rd ^ flags << 30`, starting from `0xFFFFFFFF`.
 - Compare the signature with a software model of the same sequence. After reset, N = 25 and seed `0x12345678` give `0x1BA9615E`.
-- It takes about 50 clocks per instruction.
+- It takes about 53 clocks per instruction.
 
 ### Legacy protocol (PROTO = 0)
 
@@ -194,11 +194,10 @@ There is one improvement over the original: a transaction left half-done (a lost
 
 | Corner | Setup slack at 25 MHz | Highest core clock |
 |---|---|---|
-| typical (25 °C, 3.3 V) | +14.4 ns | about 39 MHz |
-| slow (125 °C, 3.0 V) | −7.2 ns, −9.4 ns with worst-case wiring | about 20 MHz |
-| fast (−40 °C, 3.6 V) | +21.5 ns | above 50 MHz |
+| typical (25 °C, 3.3 V) | +18.9 ns | about 47 MHz |
+| slow (125 °C, 3.0 V) | +5.7 ns, +4.6 ns with worst-case wiring | about 28 MHz |
 
-Hold timing is met at every corner (worst slack +0.38 ns), so a slower clock always works. At the slow corner the paths that miss 25 MHz are in the CORDIC sequencer and in the frame's instruction-queue write, so a slow part should run at 20 MHz or less, with the SPI limits below scaled to match. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
+25 MHz is met at every corner, including the slow one, so every part runs at the full clock. Hold timing is met too, so a slower clock always works. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
 
 **SPI.** The slave's limits are counted in core clocks, so they scale with the clock you run:
 
