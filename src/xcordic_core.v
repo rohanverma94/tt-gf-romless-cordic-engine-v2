@@ -239,6 +239,7 @@ module xcordic_core #(
     // pipeline registers, loaded in S_PREP / S_MIDP from the same inputs the
     // following S_PRE / S_MID sees (op_rs*, engine outputs, t_a, pass, quadrant)
     reg  signed [W-1:0] q_va, q_vb;      // normalization lane operands
+    reg                 q_za, q_zb;      // q_va == 0, q_vb == 0 (S_PRE1 / S_MID1), for the early finishes
     reg  signed [5:0]   q_na, q_nb;      // their shifts
     reg  [1:0]          q_quad;          // rotation quadrant
     reg  signed [W-1:0] q_thm;           // angle mapped into [0, pi/2)
@@ -489,8 +490,8 @@ module xcordic_core #(
     // full-range divide of (da, db); special cases finish immediately
     task launch_fdiv;
         begin
-            if (q_va == 0)       finish(32'd0, 2'b00);
-            else if (q_vb == 0)  finish(sx(q_va[W-1] ? SAT_MIN : SAT_MAX), 2'b01);
+            if (q_za)            finish(32'd0, 2'b00);
+            else if (q_zb)       finish(sx(q_va[W-1] ? SAT_MIN : SAT_MAX), 2'b01);
             else begin
                 kexp <= d_sb - d_sa;
                 launch(M_LIN, D_DIV, dbn, dan, {W{1'b0}});
@@ -507,6 +508,7 @@ module xcordic_core #(
         end else if (state == S_PRE1 || state == S_MID1) begin
             if (state == S_MID1) q_kl2 <= kl_c;
             q_na <= n_a;  q_nb <= n_b;
+            q_za <= (q_va == 0);  q_zb <= (q_vb == 0);
             q_quad <= w_quadrant;  q_thm <= th_mapped;
             q_xk <= x_k;
             q_scv <= sc_v;  q_sce <= sc_e;
@@ -598,7 +600,7 @@ module xcordic_core #(
                     launch(M_HYP, D_VEC, up(f_lo), up(f_hi), {W{1'b0}});
                 end
                 oh[OP_ATAN2], oh[OP_HYPOT]: begin
-                    if (q_va == 0 && q_vb == 0) finish(32'd0, 2'b00);     // p_zero, captured
+                    if (q_za && q_zb) finish(32'd0, 2'b00);           // p_zero, captured
                     else begin
                         kexp <= -p_sh;
                         launch_vec;
@@ -617,7 +619,7 @@ module xcordic_core #(
                     end
                 end
                 oh[OP_ROTC]: begin
-                    if (q_va == 0 && q_vb == 0) finish(32'd0, 2'b00);     // p_zero, captured
+                    if (q_za && q_zb) finish(32'd0, 2'b00);           // p_zero, captured
                     else begin
                         kexp <= -p_sh;
                         launch_rotate(pxn, pyn);
