@@ -194,10 +194,11 @@ There is one improvement over the original: a transaction left half-done (a lost
 
 | Corner | Setup slack at 25 MHz | Highest core clock |
 |---|---|---|
-| typical (25 °C, 3.3 V) | +18.9 ns | about 47 MHz |
-| slow (125 °C, 3.0 V) | +5.7 ns, +4.6 ns with worst-case wiring | about 28 MHz |
+| typical (25 °C, 3.3 V) | +18.2 ns | about 46 MHz |
+| slow (125 °C, 3.0 V) | +4.2 ns, +2.2 ns with worst-case wiring | about 26 MHz |
+| fast (−40 °C, 3.6 V) | +23.7 ns | above 50 MHz |
 
-25 MHz is met at every corner, including the slow one, so every part runs at the full clock. Hold timing is met too, so a slower clock always works. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
+25 MHz is met at every corner, including the slow one, so every part runs at the full clock. Hold timing is met at every corner too (worst +0.38 ns, at the fast corner), so a slower clock always works. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
 
 **SPI.** The slave's limits are counted in core clocks, so they scale with the clock you run:
 
