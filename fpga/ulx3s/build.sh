@@ -45,7 +45,7 @@ if [ "$CLK_MHZ" != 25 ]; then
 fi
 
 echo "== yosys (GUARD=$GUARD)"
-$YOSYS -q -l $B/yosys.log -p "read_verilog $DEFS xcordic_ulx3s.v $EXTRA $RTL; synth_ecp5 -top xcordic_ulx3s -json $B/xcordic_ulx3s.json"
+$YOSYS -q -l $B/yosys.log -p "read_verilog $DEFS xcordic_ulx3s.v $EXTRA $RTL; synth_ecp5 -top xcordic_ulx3s; delete t:\$scopeinfo; write_json $B/xcordic_ulx3s.json"
 grep -A40 "Printing statistics" $B/yosys.log | grep -E "LUT4|TRELLIS_FF|CCU2C|MULT18|DP16KD" || true
 
 echo "== nextpnr-ecp5 (LFE5U-85F, CABGA381, core clock $CLK_MHZ MHz)"
