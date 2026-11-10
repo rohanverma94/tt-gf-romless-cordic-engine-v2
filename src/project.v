@@ -18,7 +18,7 @@
 module tt_um_xcordic #(
     parameter FUNCS = 1,
     parameter GUARD = 4,
-    parameter TIMEOUT_LOG2 = 24,
+    parameter TIMEOUT_LOG2 = 28,
     parameter SPI_SCLK = 0
 )(
     input  wire [7:0] ui_in,
@@ -34,20 +34,32 @@ module tt_um_xcordic #(
     assign uio_oe  = 8'd0;
     wire _unused = &{ena, uio_in, ui_in[7:5], 1'b0};
 
+    // rst_n and PROTO come straight from pads: two flops each before use. The
+    // reset is still synchronous everywhere (it needs a running clock), it only
+    // reaches every flop in the same cycle now. CPHA is a strap: set it before
+    // the first frame and leave it.
+    reg [1:0] rst_s, proto_s;
+    always @(posedge clk) begin
+        rst_s   <= {rst_s[0], rst_n};
+        proto_s <= {proto_s[0], ui_in[3]};
+    end
+    wire rst_i   = rst_s[1];
+    wire proto_i = proto_s[1];
+
     wire       miso, data_ready, busy;
     wire [7:0] rx_data, tx_data, tx_next;
     wire       rx_valid, cs_on, frame_start, frame_end;
 
     generate if (SPI_SCLK) begin : g_spi
         xc_spi_slave_sclk spi (
-            .clk(clk), .rst_n(rst_n), .cpha(ui_in[4]),
+            .clk(clk), .rst_n(rst_i), .cpha(ui_in[4]),
             .sclk(ui_in[0]), .mosi(ui_in[1]), .miso(miso), .cs_n(ui_in[2]),
             .tx_data(tx_data), .tx_next(tx_next), .rx_data(rx_data), .rx_valid(rx_valid),
             .cs_on(cs_on), .frame_start(frame_start), .frame_end(frame_end)
         );
     end else begin : g_spi
         xc_spi_slave spi (
-            .clk(clk), .rst_n(rst_n), .cpha(ui_in[4]),
+            .clk(clk), .rst_n(rst_i), .cpha(ui_in[4]),
             .sclk(ui_in[0]), .mosi(ui_in[1]), .miso(miso), .cs_n(ui_in[2]),
             .tx_data(tx_data), .tx_next(tx_next), .rx_data(rx_data), .rx_valid(rx_valid),
             .cs_on(cs_on), .frame_start(frame_start), .frame_end(frame_end)
@@ -66,7 +78,7 @@ module tt_um_xcordic #(
     wire [31:0] c_rs1, c_rs2, c_rd;
 
     xc_frame #(.FUNCS(FUNCS), .GUARD(GUARD), .TIMEOUT_LOG2(TIMEOUT_LOG2)) frame (
-        .clk(clk), .rst_n(rst_n), .proto_pin(ui_in[3]),
+        .clk(clk), .rst_n(rst_i), .proto_pin(proto_i),
         .rx_data(rx_data), .rx_valid(rx_valid), .cs_on(cs_on),
         .frame_start(frame_start), .frame_end(frame_end),
         .tx_data(tx_data), .tx_next(tx_next),
@@ -76,7 +88,7 @@ module tt_um_xcordic #(
     );
 
     xc_bist #(.FUNCS(FUNCS)) bist (
-        .clk(clk), .rst_n(rst_n),
+        .clk(clk), .rst_n(rst_i),
         .u_start(f_start), .u_funct7(f_funct7), .u_funct3(f_funct3),
         .u_rs1(f_rs1), .u_rs2(f_rs2), .u_busy(f_busy), .u_done(f_done), .u_rd(f_rd), .u_flags(f_flags),
         .c_start(c_start), .c_funct7(c_funct7), .c_funct3(c_funct3),
@@ -84,7 +96,7 @@ module tt_um_xcordic #(
     );
 
     xcordic_core #(.FUNCS(FUNCS), .GUARD(GUARD)) core (
-        .clk(clk), .rstn(rst_n), .start(c_start),
+        .clk(clk), .rstn(rst_i), .start(c_start),
         .funct7(c_funct7), .funct3(c_funct3), .rs1(c_rs1), .rs2(c_rs2),
         .busy(c_busy), .done(c_done), .rd(c_rd), .flags(c_flags)
     );

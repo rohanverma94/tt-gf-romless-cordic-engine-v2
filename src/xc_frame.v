@@ -39,14 +39,18 @@
 //   unread (VALID tells).
 //
 // The protocol is selected by the PROTO pin; it is taken over only while no
-// transaction is in progress and CS is high.
+// transaction is in progress, CS is high and the last frame has ended
+// (frame_end seen). While the legacy protocol is selected the command frame
+// registers are held clear, so nothing of an earlier command session is acted
+// on after a switch back (a frame received in legacy mode can never move the
+// queues).
 `timescale 1ns/1ps
 `default_nettype none
 
 module xc_frame #(
     parameter FUNCS = 1,
     parameter GUARD = 0,
-    parameter TIMEOUT_LOG2 = 24
+    parameter TIMEOUT_LOG2 = 28
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -74,6 +78,7 @@ module xc_frame #(
     output wire        busy
 );
     reg proto;                              // 0 legacy, 1 command
+    reg cs_q;                               // cs_on one cycle ago
 
     // =====================================================================
     // legacy protocol
@@ -170,7 +175,8 @@ module xc_frame #(
     always @(posedge clk) begin
         c_start <= 1'b0;
         if (!rst_n) begin
-            proto <= 1'b0;
+            // the protocol is the pin's from the first cycle out of reset
+            proto <= proto_pin; cs_q <= 1'b0;
             ls <= L_IDLE; lk <= 0; lin <= 0; lout <= 0; lready <= 0; lquiet <= 0;
             ck <= 0; ccmd <= 0; crs1 <= 0; crs2 <= 0; crd <= 0; cflg <= 0;
             cerr <= 0; cseq <= 0; cexec <= 0; cpend <= 0; csnap <= 0; cfv <= 0; cany <= 0;
@@ -182,13 +188,19 @@ module xc_frame #(
             c_funct7 <= 0; c_funct3 <= 0; c_rs1 <= 0; c_rs2 <= 0;
         end else begin
             // take over the protocol pin only between transactions
-            if (!cs_on && ls == L_IDLE && !cexec && !cpend && !c_busy && iq_n == 3'd0) proto <= proto_pin;
+            // (cs_q, frame_end: the frame that just ended is still being closed)
+            cs_q <= cs_on;
+            if (!cs_on && !cs_q && !frame_end && ls == L_IDLE && !cexec && !cpend && !c_busy && iq_n == 3'd0)
+                proto <= proto_pin;
+            // STATUS/RD snapshot, in both protocols: fresh at the first command frame
+            if (!cs_on) csnap <= {6'd0, cflg_out, crd_out, cstatus};
 
             if (!proto) begin
                 // ---------------- legacy ----------------
                 // host inactivity only: the count restarts with every byte and
                 // is held while the core computes, so DATA_READY opens a full
                 // timeout window for the reads (N2)
+                ck <= 0; ccmd <= 0; cfv <= 1'b0;       // no command frame state in legacy mode
                 if (rx_valid || ls == L_WAIT) lquiet <= 0;
                 else if (!ltimeout) lquiet <= lquiet + 1'b1;
                 case (ls)
@@ -240,7 +252,6 @@ module xc_frame #(
                 endcase
             end else begin
                 // ---------------- command ----------------
-                if (!cs_on) csnap <= {6'd0, cflg_out, crd_out, cstatus};
                 if (frame_start) cfv <= csnap[1];
                 if (frame_start) ck <= 0;
                 else if (rx_valid) begin
