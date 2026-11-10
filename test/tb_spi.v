@@ -150,6 +150,16 @@ module tb_spi;
 
     integer errors = 0, checks = 0;
 
+    // PROTO driven at a chosen instant around a frame: pmode 1 = pdel ns after
+    // CS rises, 2 = pdel ns after CS falls; pskip = frames to let pass first
+    integer pmode = 0, pdel = 0, pskip = 0; reg pval = 0;
+    always @(posedge cs_n) if (pmode == 1) begin
+        if (pskip > 0) pskip = pskip - 1; else begin pmode = 0; #(pdel) proto = pval; end
+    end
+    always @(negedge cs_n) if (pmode == 2) begin
+        if (pskip > 0) pskip = pskip - 1; else begin pmode = 0; #(pdel) proto = pval; end
+    end
+
     // ---------------- legacy transaction ----------------
     task legacy(input [15:0] x, input [15:0] y, input [15:0] a, input [15:0] at0, input integer multi,
                 output [15:0] s, output [15:0] c);
@@ -371,6 +381,68 @@ module tb_spi;
             if (rd !== want) begin errors = errors + 1; $display("  bist N=25: %08h want %08h", rd, want); end
             checks = checks + 8;
             $display("command queues and bist: %0s (bist 25 = %08h)", errors == e0 ? "OK" : "FAILED", rd);
+            // protocol switches. An EXEC is left unread, the host goes to the legacy
+            // protocol for one transaction and returns PROTO to 1 during the last
+            // legacy frame or 0..3 clocks after its CS rises: the legacy frame must
+            // not move the queues (exactly the one result, same number, afterwards).
+            e0 = errors;
+            begin : switch_test
+                integer v; reg [7:0] st0; reg [31:0] w1;
+                for (v = 0; v < 8; v = v + 1) begin
+                    a = 32'h0300 * (v + 1);
+                    cmd(8'h88, a, 0, 5, st, rd); wait_idle;          // sin, not read: the last command frame is an EXEC
+                    ref_exec(1, 0, a, 0, w1);
+                    proto = 0; #(12 * `CLKP);
+                    pval = 1; pskip = multi ? 1 : 13;
+                    if (v == 0) begin pmode = 2; pdel = TS + 2 * (TH + TL); end
+                    else begin pmode = 1; pdel = (v - 1) * `CLKP / 2; end
+                    legacy(16'h09B7, 16'h0000, 16'h0C90, 16'h0C91, multi, s, c);
+                    ref_exec(0, 7, 32'h0C91 << RG, 0, want);
+                    ref_exec(0, 0, {16'h0000, 16'h09B7}, 32'h0C90, want);
+                    #(12 * `CLKP); proto = 1; #(12 * `CLKP);
+                    wait_idle;
+                    checks = checks + 1;
+                    if ({s, c} !== want) begin errors = errors + 1; $display("  switch %0d: legacy result wrong", v); end
+                    cmd(8'h00, 0, 0, 6, st, rd);
+                    st0 = st;
+                    if (!st[1] || st[0] || rd !== w1) begin
+                        errors = errors + 1; $display("  switch %0d: first read status %02h rd %08h want %08h", v, st, rd, w1); end
+                    cmd(8'h00, 0, 0, 6, st, rd);
+                    if (st[1] || st[0] || st[7:4] !== st0[7:4]) begin
+                        errors = errors + 1; $display("  switch %0d: a legacy frame moved the queues (status %02h after %02h)", v, st, st0); end
+                end
+                // the other way: PROTO falls as the CS of a read frame rises; the
+                // read still removes its result
+                for (v = 0; v < 4; v = v + 1) begin
+                    cmd(8'h88, 32'h0500, 0, 5, st, rd); wait_idle;
+                    pval = 0; pskip = 0; pmode = 1; pdel = v * `CLKP / 2;
+                    cmd(8'h00, 0, 0, 6, st, rd);
+                    #(12 * `CLKP); proto = 1; #(12 * `CLKP);
+                    cmd(8'h00, 0, 0, 1, st2, rd);
+                    checks = checks + 1;
+                    if (!st[1] || st2[1]) begin errors = errors + 1; $display("  switch back %0d: read not taken (status %02h then %02h)", v, st, st2); end
+                end
+            end
+            $display("protocol switches around a frame: %0s", errors == e0 ? "OK" : "FAILED");
+            // reset in the middle of a command frame (CS low, SCLK running): after
+            // it the unit is in the pin's protocol and executes normally
+            e0 = errors;
+            begin : reset_test
+                integer q;
+                txb[0] = 8'h88; {txb[4], txb[3], txb[2], txb[1]} = 32'h0700;
+                fork
+                    frame(9);
+                    begin #(TS + 19 * (TH + TL) + 3); rst_n = 0; #(6 * `CLKP); rst_n = 1; end
+                join
+                #(40 * `CLKP); wait_idle;
+                for (q = 0; q < 6; q = q + 1) cmd(8'h00, 0, 0, 6, st, rd);     // whatever the cut frame left
+                if (st[1] || st[0]) begin errors = errors + 1; $display("  after reset: status %02h", st); end
+                cmd(8'h88, 32'h0700, 0, 5, st, rd); wait_idle; cmd(8'h00, 0, 0, 6, st, rd);
+                ref_exec(1, 0, 32'h0700, 0, want);
+                checks = checks + 1;
+                if (rd !== want || !st[1]) begin errors = errors + 1; $display("  after reset: rd %08h want %08h status %02h", rd, want, st); end
+            end
+            $display("reset inside a command frame: %0s", errors == e0 ? "OK" : "FAILED");
         end
 `endif
         $display("RESULT: %0d checks, %0d errors", checks, errors);
