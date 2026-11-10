@@ -12,7 +12,7 @@ Xcordic is a ROM-less CORDIC function unit, a small math co-processor you talk t
 
 **Extras:**
 - A 4-deep instruction queue and a 4-deep result queue, so a host can stream work without waiting.
-- Two flags with every result: SAT (the result was clipped) and INV (invalid argument).
+- Two flags with every function result (ops 8–19): SAT (the result was clipped) and INV (invalid argument). The raw CORDIC passes (ops 0–6) are unchecked; their limits are listed with them.
 - A built-in self-test instruction.
 
 ### The math
@@ -113,7 +113,11 @@ Mean errors are 0.2–0.4 steps. tan is accurate except right next to its poles.
 | uo[1] | DATA_READY |
 | uo[2] | BUSY |
 
-SPI uses CPOL = 0, MSB first. CS can go high after every byte or stay low for a whole frame. Change PROTO only while CS is high and nothing is in progress.
+SPI uses CPOL = 0, MSB first. CS can go high after every byte or stay low for a whole frame.
+
+**PROTO** may change at any time. The unit follows it only between frames, with nothing in progress in either protocol, so a frame is never acted on by the other protocol. Keep it steady from 4 clocks before CS falls until CS rises, so the whole frame (and its first MISO byte) belongs to one protocol. **CPHA** is a strap: set it before the first frame and leave it.
+
+**Reset:** `rst_n` is synchronous and needs the clock running. Hold it low for at least 4 clocks. The unit comes out of reset in the protocol the PROTO pin selects.
 
 ### Command protocol (PROTO = 1)
 
@@ -136,22 +140,22 @@ Each instruction is one CS frame.
 | `FLAGS` bit 0 | `SAT`: the result (either half of a pair) was clipped to [−8, 8) |
 | `FLAGS` bit 1 | `INV`: invalid argument (divide by 0, ln of a ≤ 0, sqrt of a < 0) |
 
-**Queues:** up to 4 instructions wait their turn, and up to 4 results wait to be read. A frame of 5 bytes or more that showed `VALID` removes that result, so the next frame shows the next one. The simple flow (send, wait for DATA_READY, read) works without any thought about queues. To stream, send instructions back to back and collect a result from every frame that shows `VALID`.
+**Queues:** up to 4 instructions wait their turn, and up to 4 results wait to be read. A frame of 5 bytes or more that showed `VALID` removes that result, so the next frame shows the next one. The simple flow (send, wait for DATA_READY, read) works without any thought about queues. To stream, send instructions back to back and collect a result from every frame that shows `VALID`. An instruction starts only when the result queue has room, so with 4 results unread nothing more runs: a host that queues 5 or more must read by `VALID`, and must not wait for DATA_READY first.
 
 **Pins:**
-- DATA_READY goes high once everything queued has finished.
+- DATA_READY goes high once everything queued has finished, and stays high until the next instruction arrives, whether or not the results have been read (`VALID` tells).
 - BUSY is high while anything is queued or running.
 - Both react as soon as an instruction's command byte arrives, so you can poll them right after raising CS.
 
 | op | name | result |
 |---|---|---|
-| 0 | rot | {y′, x′} = K · rotate({y, x} = RS1 by θ = RS2) |
+| 0 | rot | {y′, x′} = K · rotate({y, x} = RS1 by θ = RS2) (K·√(x² + y²) < 8) |
 | 1 | sincos | {sin, cos} of RS1 |
-| 2 | vec | {atan2(y, x), K·√(x² + y²)}, {y, x} = RS1 |
-| 3 | mac | y + x·z, {y, x} = RS1, z = RS2 (\|z\| < 2) |
-| 4 | ldiv | y / x, {y, x} = RS1 (\|y/x\| < 2) |
+| 2 | vec | {atan2(y, x), K·√(x² + y²)}, {y, x} = RS1 (K·√(x² + y²) < 8) |
+| 3 | mac | y + x·z, {y, x} = RS1, z = RS2 (\|z\| < 2, \|y + x·z\| < 8) |
+| 4 | ldiv | y / x, {y, x} = RS1 (x ≠ 0, \|y/x\| < 2) |
 | 5 | hsincos | {sinh, cosh} of RS1 (\|RS1\| < 1.118) |
-| 6 | hvec | {atanh(y/x), K′·√(x² − y²)}, {y, x} = RS1 |
+| 6 | hvec | {atanh(y/x), K′·√(x² − y²)}, {y, x} = RS1 (x > 0, \|y/x\| < 0.75) |
 | 7 | cfg | read or write a CORDIC constant: old = cfg[RS2 & 7]; RS1 is written unless RS2 & 8 |
 | 8 | sin | sin RS1 |
 | 9 | cos | cos RS1 |
@@ -167,6 +171,8 @@ Each instruction is one CS frame.
 | 19 | rotc | {y′, x′} = rotate({y, x} = RS1 by θ = RS2), gain removed |
 | 20 | bist | self-test, below |
 
+**Ops 0–6 are raw engine passes.** They run one CORDIC pass on the operands as given, with no range reduction and no checks: `FLAGS` does not report what follows. Inside the limits in the table they are as accurate as the functions. Outside them the result is wrong without warning: a value that passes ±8 inside the engine wraps around (vec of (3.5, 3.5) returns K·|v| = −7.77), and an argument the pass cannot converge on gives a fixed wrong answer (ldiv 1/0 returns 2.0). The limit K·√(x² + y²) < 8 means √(x² + y²) < 4.85. Use ops 8–19 when you want the full range, saturation and the flags; rot (op 0) also accepts any angle.
+
 Operands and results are S3.12 in the low 16 bits; pairs pack two values as {high, low}. CORDIC instructions take up to 78 clocks (3.1 µs at 25 MHz), and mul, div and sqrt take 23–25.
 
 The exact instructions return the true value rounded to the nearest step, ties going up: mul = ⌊a·b/4096 + ½⌋, div = ⌊4096·a/b + ½⌋, sqrt = ⌊√(4096·a) + ½⌋. For example 1/3 → 0x0555, −1/3 → 0xFAAB, √2 → 0x16A1.
@@ -174,7 +180,7 @@ The exact instructions return the true value rounded to the nearest step, ties g
 **Self-test (op 20):** RS1[15:0] = N, RS2 = seed (0 means 1).
 - It runs N instructions, cycling through ops 0–6 and 8–19, on operands from a 32-bit LFSR (polynomial mask `0x80200003`).
 - It folds each result and its flags into a 32-bit signature: `sig = (sig >> 1 ^ (sig & 1 ? 0x80200003 : 0)) ^ rd ^ flags << 30`, starting from `0xFFFFFFFF`.
-- Compare the signature with a software model of the same sequence. After reset, N = 25 and seed `0x12345678` give `0x1BA9615E`.
+- Compare the signature with a software model of the same sequence. After reset, N = 25 and seed `0x12345678` give `0x1BA9615E`; N = 1000 and seed `0xC0FFEE01` give `0xEEE2B8D2`.
 - It takes about 53 clocks per instruction.
 
 ### Legacy protocol (PROTO = 0)
@@ -186,7 +192,7 @@ The frames of `tt_um_romless_cordic_engine`, so its test harness works unchanged
 
 With `in_x` = 0x09B7 (1/K) and `in_y` = 0 you get sin and cos of `in_alpha`. Send `in_atan_0` = 0x0C91. The old per-half calibration values (0x0C7F/0x0CA4) are no longer needed, because the second step angle is now correct.
 
-There is one improvement over the original: a transaction left half-done (a lost byte, or a read before DATA_READY) is dropped after 2²⁴ clocks without a byte (0.67 s). A confused host only has to pause that long. Within a transaction, keep the gaps between bytes shorter than that; the time the core spends computing does not count.
+There is one improvement over the original: a transaction left half-done (a lost byte, or a read before DATA_READY) is dropped after 2²⁸ clocks without a byte (10.7 s at 25 MHz). A confused host only has to pause that long, or reset. Within a transaction, keep the gaps between bytes, and the wait from DATA_READY to the first read, shorter than that; the time the core spends computing does not count.
 
 ### Timing
 
@@ -194,11 +200,11 @@ There is one improvement over the original: a transaction left half-done (a lost
 
 | Corner | Setup slack at 25 MHz | Highest core clock |
 |---|---|---|
-| typical (25 °C, 3.3 V) | +18.2 ns | about 46 MHz |
-| slow (125 °C, 3.0 V) | +4.2 ns, +2.2 ns with worst-case wiring | about 26 MHz |
-| fast (−40 °C, 3.6 V) | +23.7 ns | above 50 MHz |
+| typical (25 °C, 3.3 V) | +19.3 ns | about 48 MHz |
+| slow (125 °C, 3.0 V) | +4.0 ns, +2.3 ns with worst-case wiring | about 26 MHz |
+| fast (−40 °C, 3.6 V) | +24.3 ns | above 50 MHz |
 
-25 MHz is met at every corner, including the slow one, so every part runs at the full clock. Hold timing is met at every corner too (worst +0.38 ns, at the fast corner), so a slower clock always works. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
+25 MHz is met at every corner, including the slow one, so every part runs at the full clock. Hold timing is met at every corner too (worst +0.19 ns, at the fast corner), so a slower clock always works. A part on the bench at room temperature behaves much closer to the typical corner; the harness's `fclk` and `shmoo` commands find its real limit.
 
 **SPI.** The slave's limits are counted in core clocks, so they scale with the clock you run:
 
