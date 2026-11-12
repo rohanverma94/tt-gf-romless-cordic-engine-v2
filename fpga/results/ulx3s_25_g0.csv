@@ -1,0 +1,57 @@
+identify,PASS,0
+identify,PASS,0
+bitexact,rot,2000,0,0
+bitexact,sincos,2000,0,0
+bitexact,vec,2000,0,0
+bitexact,mac,2000,0,0
+bitexact,ldiv,2000,0,0
+bitexact,hsincos,2000,0,0
+bitexact,hvec,2000,0,0
+bitexact,cfg,2000,0,0
+bitexact,sin,2000,0,0
+bitexact,cos,2000,0,0
+bitexact,tan,2000,0,0
+bitexact,atan2,2000,0,0
+bitexact,hypot,2000,0,0
+bitexact,exp,2000,0,0
+bitexact,ln,2000,0,0
+bitexact,sqrt,2000,0,0
+bitexact,mul,2000,0,0
+bitexact,div,2000,0,0
+bitexact,tanh,2000,0,0
+bitexact,rotc,2000,0,0
+bitexact,cfg_random,19152,0,0
+protocol,read-only frame does not execute,PASS
+protocol,DATA_READY low and BUSY high right after an EXEC frame,PASS
+protocol,DATA_READY returns, BUSY clears,PASS
+protocol,STATUS: VALID, no ERR, SEQ + 1,PASS
+protocol,RD = model,PASS
+protocol,illegal op (21, 22, 25, 31): ERR, nothing executed,PASS
+protocol,EXEC frame shorter than 5 bytes: ERR, nothing executed,PASS
+protocol,next good EXEC clears ERR,PASS
+protocol,16-byte read frame: STATUS, RD, FLAGS, then zeros,PASS
+protocol,exact mul/div/sqrt and FLAGS (SAT, INV),PASS
+protocol,pipelined frame returns the previous result, runs the next,PASS
+protocol,queue: 4 EXECs back to back, 4 results in order,PASS
+protocol,bist: 300 instructions, signature = model,PASS
+protocol,one-operand op: 5- and 9-byte EXEC frames agree,PASS
+protocol,cfg read-only (RS2 bit 3) leaves the register,PASS
+protocol,cfg selectors 5..7 read 0 and change nothing,PASS
+protocol,legacy, one CS per byte,PASS
+protocol,legacy, multi-byte frames (8 + 6),PASS
+protocol,legacy: DATA_READY low after the read-out,PASS
+protocol,legacy recovers after the timeout,PASS
+protocol,back to command frames (PROTO = 1),PASS
+legacy,250,1,1.7436,5.5386,1.7436,5.5386,0,0,0
+accuracy,sin,65536,8.7609,1.7550,2.1836,8.7609,1.7550,0,0
+accuracy,cos,65536,8.7437,1.7104,2.1320,8.7437,1.7104,0,0
+accuracy,tan,65536,335.3245,11.3526,26.5952,46.8885,4.4185,0,0
+accuracy,exp,65536,103.5288,1.9819,5.4434,13.3686,0.8321,0,0
+accuracy,ln,65536,10.5516,3.4848,3.9478,10.5516,2.6139,0,0
+accuracy,sqrt,65536,0.5000,0.2494,0.2885,0.5000,0.1450,0,0
+accuracy,tanh,65536,7.0003,1.1168,1.3062,7.0003,1.1168,0,0
+accuracy,atan2,65536,4.8789,1.0215,1.2696,4.7866,0.6968,0,0
+accuracy,hypot,65536,24.4503,3.9360,5.1779,4.9384,0.7494,0,0
+accuracy,mul,65536,0.5000,0.2497,0.2887,0.5000,0.1178,0,0
+accuracy,div,65536,0.5000,0.2502,0.2890,0.5000,0.1995,0,0
+regression,PASS
