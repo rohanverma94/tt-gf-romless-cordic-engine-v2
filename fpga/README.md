@@ -65,6 +65,34 @@ The pin sites come from the board's reference `ulx3s_v20.lpf`. Check `fpga/ulx3s
 
 Keep wires short (≤ 15 cm). The ULX3S drives MISO directly; there is no level shifter.
 
+## 3. Pico
+
+Flash `host/pico_harness/prebuilt/xcordic_harness_pico.uf2` (RP2040) or `xcordic_harness_pico2.uf2` (RP2350): hold BOOTSEL, plug the board in, copy the file. Then talk to it over the USB serial port, with any terminal or with the PC tool:
+
+```sh
+g++ -O2 -std=c++17 -o xch host/pico_harness/tools/xch.cpp
+./xch /dev/ttyACM0 -o ulx3s.csv "fclk 25" id regression
+```
+
+Session on the FPGA:
+
+1. `fclk 25`: the core clock, which is the oscillator. Use the `CLK_MHZ` value if you built with the PLL.
+2. `id`: link check and GUARD detection. The G4 bitstream reads atan0 = 0xc910, the G0 bitstream 0x0c91.
+3. `regression`: bit-exact against the C++ model (all 20 ops, STATUS/SEQ/FLAGS on every frame), protocol (including the 4-deep queues and a 300-instruction self-test), legacy frames, and exhaustive accuracy. It takes a few minutes.
+4. `sclk 6` then `calibrate`, then `shmoo 1 6 1`: the SPI timing window. This slave samples SCLK with the core clock, so SCLK must stay at or below fclk / 4. That is 6.25 MHz at 25 MHz.
+5. `perf`: ops/s per instruction over the real link.
+
 ### Quick check without the Pico
 
 Send `94 19 00 00 00 78 56 34 12` (self-test, N = 25, seed 0x12345678) over any SPI master, mode 0, PROTO high. Wait for DATA_READY, then read 5 bytes: STATUS, then RD = `5E 61 A9 1B` (0x1BA9615E) on the GUARD 4 bitstream, or 0x63C38BD6 on GUARD 0.
+
+## 4. Simulation (optional)
+
+`test/tb_spi.v` is the testbench these bitstreams were checked against:
+
+```sh
+NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/xc_frame.v src/xc_bist.v src/xc_exact.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
+iverilog -g2012 -DG=4 -o tb test/tb_spi.v $NEW && vvp -n tb +TH=40 +TL=43 +MULTI=1
+```
+
+It expects `RESULT: 1274 checks, 0 errors`. The full `test/run.sh` also needs `third_party/` from the repo.
