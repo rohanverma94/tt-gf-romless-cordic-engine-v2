@@ -1,0 +1,7 @@
+// For the simulation builds only: split the prefix-network vectors of xc_add into bits, so the
+// adder is ordinary feed-forward logic to the simulator (as one vector each it
+// looks circular and the model runs about 30 times slower). No effect on the
+// design: this file is read by the simulation builds here and nowhere else.
+`verilator_config
+split_var -module "xc_add" -var "G"
+split_var -module "xc_add" -var "P"
