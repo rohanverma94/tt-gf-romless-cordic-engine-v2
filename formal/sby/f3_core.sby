@@ -1,0 +1,133 @@
+# MAXCYC 34: the longest instruction takes 34 cycles with the pipelined pass setup and S_CFG; BMC depth 35
+# F3: xcordic_core sequencer, with the engine replaced by its contract
+#  a_*:   control invariants, stutter lemmas, wrapper contract (unbounded, k-induction)
+#  b_*:   one instruction per task: from every clean idle state the core meets sp_alg
+#         (complete BMC; engine runs are 1 cycle, F3a's stutter lemma covers longer runs)
+#  cov_*: the longest pass sequence of each multi-pass instruction is reachable,
+#         and (cov_op17) an instruction on the exact unit completes
+#  *_g0 / *_g4: datapath GUARD = 0 (ttsky25a, 16 bits) / GUARD = 4 (20 bits)
+[tasks]
+a_funcs1_g0 a g0
+a_funcs0_g0 a funcs0 g0
+b_op0_g0 b op0 g0
+b_op1_g0 b op1 g0
+b_op2_g0 b op2 g0
+b_op3_g0 b op3 g0
+b_op4_g0 b op4 g0
+b_op5_g0 b op5 g0
+b_op6_g0 b op6 g0
+b_op7_g0 b op7 g0
+b_op8_g0 b op8 g0
+b_op9_g0 b op9 g0
+b_op10_g0 b op10 g0
+b_op11_g0 b op11 g0
+b_op12_g0 b op12 g0
+b_op13_g0 b op13 g0
+b_op14_g0 b op14 g0
+b_op15_g0 b op15 g0
+b_op16_g0 b op16 g0
+b_op17_g0 b op17 g0
+b_op18_g0 b op18 g0
+b_op19_g0 b op19 g0
+b0_op0_g0 b funcs0 op0 g0
+b0_op1_g0 b funcs0 op1 g0
+b0_op2_g0 b funcs0 op2 g0
+b0_op3_g0 b funcs0 op3 g0
+b0_op4_g0 b funcs0 op4 g0
+b0_op5_g0 b funcs0 op5 g0
+b0_op6_g0 b funcs0 op6 g0
+b0_op7_g0 b funcs0 op7 g0
+cov_op10_g0 cov op10 k2 g0
+cov_op12_g0 cov op12 k2 g0
+cov_op17_g0 cov op17 k0 g0
+cov_op18_g0 cov op18 k2 g0
+cov_op19_g0 cov op19 k3 g0
+a_funcs1_g4 a g4
+a_funcs0_g4 a funcs0 g4
+b_op0_g4 b op0 g4
+b_op1_g4 b op1 g4
+b_op2_g4 b op2 g4
+b_op3_g4 b op3 g4
+b_op4_g4 b op4 g4
+b_op5_g4 b op5 g4
+b_op6_g4 b op6 g4
+b_op7_g4 b op7 g4
+b_op8_g4 b op8 g4
+b_op9_g4 b op9 g4
+b_op10_g4 b op10 g4
+b_op11_g4 b op11 g4
+b_op12_g4 b op12 g4
+b_op13_g4 b op13 g4
+b_op14_g4 b op14 g4
+b_op15_g4 b op15 g4
+b_op16_g4 b op16 g4
+b_op17_g4 b op17 g4
+b_op18_g4 b op18 g4
+b_op19_g4 b op19 g4
+b0_op0_g4 b funcs0 op0 g4
+b0_op1_g4 b funcs0 op1 g4
+b0_op2_g4 b funcs0 op2 g4
+b0_op3_g4 b funcs0 op3 g4
+b0_op4_g4 b funcs0 op4 g4
+b0_op5_g4 b funcs0 op5 g4
+b0_op6_g4 b funcs0 op6 g4
+b0_op7_g4 b funcs0 op7 g4
+cov_op10_g4 cov op10 k2 g4
+cov_op12_g4 cov op12 k2 g4
+cov_op17_g4 cov op17 k0 g4
+cov_op18_g4 cov op18 k2 g4
+cov_op19_g4 cov op19 k3 g4
+
+[options]
+a: mode prove
+a: depth 6
+b: mode bmc
+b: depth 35
+cov: mode cover
+cov: depth 35
+
+[engines]
+smtbmc yices
+
+[script]
+g0: read -define XC_GUARD=0
+g4: read -define XC_GUARD=4
+a: read -formal -D XC_FV_CORE -D XC_CORE_A xcordic_core.v xc_add.v xcordic_engine_abstract.v xc_exact_abstract.v
+k0: read -define XC_CORE_B_COVER_K=0
+k2: read -define XC_CORE_B_COVER_K=2
+k3: read -define XC_CORE_B_COVER_K=3
+op0: read -define XC_CORE_B_OP=0
+op1: read -define XC_CORE_B_OP=1
+op2: read -define XC_CORE_B_OP=2
+op3: read -define XC_CORE_B_OP=3
+op4: read -define XC_CORE_B_OP=4
+op5: read -define XC_CORE_B_OP=5
+op6: read -define XC_CORE_B_OP=6
+op7: read -define XC_CORE_B_OP=7
+op8: read -define XC_CORE_B_OP=8
+op9: read -define XC_CORE_B_OP=9
+op10: read -define XC_CORE_B_OP=10
+op11: read -define XC_CORE_B_OP=11
+op12: read -define XC_CORE_B_OP=12
+op13: read -define XC_CORE_B_OP=13
+op14: read -define XC_CORE_B_OP=14
+op15: read -define XC_CORE_B_OP=15
+op16: read -define XC_CORE_B_OP=16
+op17: read -define XC_CORE_B_OP=17
+op18: read -define XC_CORE_B_OP=18
+op19: read -define XC_CORE_B_OP=19
+b: read -define XC_CORE_B_COVER_K=0
+b: read -formal -D XC_FV_CORE -D XC_CORE_B -D XC_CORE_B_MAXCYC=34 -D XC_ENGINE_MAX_LAT=1 -D XC_EXACT_MAX_LAT=2 xcordic_core.v xc_add.v xcordic_engine_abstract.v xc_exact_abstract.v
+cov: read -formal -D XC_FV_CORE -D XC_CORE_B -D XC_CORE_B_MAXCYC=34 -D XC_ENGINE_MAX_LAT=1 -D XC_EXACT_MAX_LAT=2 xcordic_core.v xc_add.v xcordic_engine_abstract.v xc_exact_abstract.v
+funcs0: chparam -set FUNCS 0 xcordic_core
+g4: chparam -set GUARD 4 xcordic_core
+prep -top xcordic_core
+
+[files]
+../../src/xcordic_core.v
+../../src/xc_add.v
+../models/xcordic_engine_abstract.v
+../models/xc_exact_abstract.v
+../props/xcordic_core_props.vh
+../spec/xcordic_spec.vh
+../spec/xcordic_isa_spec.vh
