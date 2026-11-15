@@ -1,0 +1,35 @@
+# F6: the exact unit, src/xc_exact.v (mul, div, sqrt)
+#  contract: busy/done/latency/hold contract F3 assumes (unbounded, k-induction)
+#  cover:    each operation and special case completes
+#  miter:    the result depends only on (op, a, b): two copies from arbitrary
+#            idle states agree from the cycle after set-up on (unbounded)
+# The values are checked for every operand by formal/exhaustive/exact.cpp.
+[tasks]
+contract prove
+cover
+miter
+
+[options]
+prove: mode prove
+prove: depth 8
+cover: mode cover
+cover: depth 26
+miter: mode prove
+miter: depth 26
+
+[engines]
+smtbmc yices
+
+[script]
+prove: read -formal -D XC_FV_EXACT xc_exact.v
+cover: read -formal -D XC_FV_EXACT xc_exact.v
+miter: read -formal -D XC_FV_EXACT -D XC_FV_EXACT_MITER xc_exact.v
+miter: read -formal -sv fv_exact_miter.sv
+prove: prep -top xc_exact
+cover: prep -top xc_exact
+miter: prep -top fv_exact_miter
+
+[files]
+../../src/xc_exact.v
+../props/xc_exact_props.vh
+../tb/fv_exact_miter.sv
