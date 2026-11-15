@@ -1,0 +1,39 @@
+# F4: the taped-out ttsky25a CORDIC datapath (from the Xcordic project) (unmodified RTL; properties injected)
+#  engine:  CORDIC_Engine_v1 runs the rotation recurrence (unbounded, k-induction)
+#  top:     top_CORDIC_Engine_v1 quadrant pre/post and ROM-less angle feed,
+#           one transaction from reset (complete BMC)
+[tasks]
+engine
+top
+cover
+
+[options]
+engine: mode prove
+engine: depth 16
+top: mode bmc
+top: depth 26
+cover: mode cover
+cover: depth 26
+
+[engines]
+smtbmc yices
+
+[script]
+engine: read_verilog -sv CORDIC_Engine_v1_fv.v
+engine: chparam -set DATA_WIDTH 16 -set N_PE 13 CORDIC_Engine_v1
+engine: prep -top CORDIC_Engine_v1
+top: read_verilog -sv top_CORDIC_Engine_v1_fv.v CORDIC_Engine_v1_fv.v dynamic_atan.v
+cover: read_verilog -sv top_CORDIC_Engine_v1_fv.v CORDIC_Engine_v1_fv.v dynamic_atan.v
+top: read -formal fv_silicon.sv
+cover: read -formal fv_silicon.sv
+top: prep -top fv_silicon
+cover: prep -top fv_silicon
+
+[files]
+../build/gen/top_CORDIC_Engine_v1_fv.v
+../build/gen/CORDIC_Engine_v1_fv.v
+../../third_party/ttsky_orig/dynamic_atan.v
+../tb/fv_silicon.sv
+../props/ttsky_engine_props.vh
+../props/ttsky_top_props.vh
+../spec/xcordic_spec.vh
