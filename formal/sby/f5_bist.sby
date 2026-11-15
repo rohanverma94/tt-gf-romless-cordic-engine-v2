@@ -1,0 +1,34 @@
+# F5: xc_bist (cordic.bist self-test) with the core replaced by its contract
+#  prove_f1 / prove_f0: FUNCS = 1 / 0, unbounded (k-induction)
+#  cover: a 2-instruction self-test completes
+#  bmc_f1: the same properties, bounded to 48 cycles (about 10 instructions):
+#          a bug deep in a self-test then shows as a trace, not as UNKNOWN
+[tasks]
+prove_f1 prove
+prove_f0 prove f0
+cover
+bmc_f1 bmc
+
+[options]
+prove: mode prove
+prove: depth 12
+cover: mode cover
+cover: depth 40
+bmc: mode bmc
+bmc: depth 48
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal -D XC_FV_BIST xc_bist.v
+read -formal xcordic_core_abstract.v
+read -formal -sv fv_bist_top.sv
+f0: chparam -set FUNCS 0 fv_bist_top
+prep -top fv_bist_top
+
+[files]
+../../src/xc_bist.v
+../models/xcordic_core_abstract.v
+../tb/fv_bist_top.sv
+../props/xc_bist_props.vh
