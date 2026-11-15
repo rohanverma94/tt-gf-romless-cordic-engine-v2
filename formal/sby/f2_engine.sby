@@ -1,0 +1,31 @@
+# F2: xcordic_engine implements the specified CORDIC recurrence (unbounded, k-induction)
+# g0: the ttsky25a datapath (16 bits, 13/13/14 iterations)
+# g4: the GUARD = 4 datapath (20 bits, 15 circular / 17 linear / 17 hyperbolic)
+[tasks]
+prove_g0 prove g0
+cover_g0 cover g0
+prove_g4 prove g4
+cover_g4 cover g4
+
+[options]
+prove: mode prove
+cover: mode cover
+g0: depth 18
+g4: depth 21
+cover: expect pass
+
+[engines]
+smtbmc yices
+
+[script]
+g0: read -formal -D XC_FV_ENGINE -D XC_GUARD=0 xcordic_engine.v xcordic_atan.v xc_add.v
+g4: read -formal -D XC_FV_ENGINE -D XC_GUARD=4 xcordic_engine.v xcordic_atan.v xc_add.v
+g4: chparam -set DATA_WIDTH 20 -set N_PE 15 -set N_LIN 17 -set GUARD 4 xcordic_engine
+prep -top xcordic_engine
+
+[files]
+../../src/xcordic_engine.v
+../../src/xcordic_atan.v
+../../src/xc_add.v
+../props/xcordic_engine_props.vh
+../spec/xcordic_spec.vh
