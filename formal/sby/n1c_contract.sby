@@ -1,0 +1,18 @@
+# N1c: xc_spi_slave keeps the byte-interface contract N2 assumes, for any inputs (unbounded)
+[tasks]
+prove
+
+[options]
+mode prove
+depth 6
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal xc_spi_slave_n1c.v
+prep -top xc_spi_slave
+
+[files]
+../build/gen/xc_spi_slave_n1c.v
+../props/n1c_contract_props.vh
