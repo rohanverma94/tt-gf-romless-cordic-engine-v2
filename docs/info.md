@@ -173,7 +173,7 @@ Each instruction is one CS frame.
 
 **Ops 0–6 are raw engine passes.** They run one CORDIC pass on the operands as given, with no range reduction and no checks: `FLAGS` does not report what follows. Inside the limits in the table they are as accurate as the functions. Outside them the result is wrong without warning: a value that passes ±8 inside the engine wraps around (vec of (3.5, 3.5) returns K·|v| = −7.77), and an argument the pass cannot converge on gives a fixed wrong answer (ldiv 1/0 returns 2.0). The limit K·√(x² + y²) < 8 means √(x² + y²) < 4.85. Use ops 8–19 when you want the full range, saturation and the flags; rot (op 0) also accepts any angle.
 
-Operands and results are S3.12 in the low 16 bits; pairs pack two values as {high, low}. CORDIC instructions take up to 78 clocks (3.1 µs at 25 MHz), and mul, div and sqrt take 23–25.
+Operands and results are S3.12 in the low 16 bits; pairs pack two values as {high, low}. CORDIC instructions take up to 77 clocks (3.1 µs at 25 MHz), and mul, div and sqrt take 23–25.
 
 The exact instructions return the true value rounded to the nearest step, ties going up: mul = ⌊a·b/4096 + ½⌋, div = ⌊4096·a/b + ½⌋, sqrt = ⌊√(4096·a) + ½⌋. For example 1/3 → 0x0555, −1/3 → 0xFAAB, √2 → 0x16A1.
 
