@@ -95,4 +95,4 @@ NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/
 iverilog -g2012 -DG=4 -o tb test/tb_spi.v $NEW && vvp -n tb +TH=40 +TL=43 +MULTI=1
 ```
 
-It expects `RESULT: 1274 checks, 0 errors`. The full `test/run.sh` also needs `third_party/` from the repo.
+It expects `RESULT: 251 checks, 0 errors`. The full `test/run.sh` also needs `third_party/` from the repo.
