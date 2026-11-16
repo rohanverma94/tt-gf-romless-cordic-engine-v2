@@ -8,7 +8,7 @@ C++ firmware for an RP2040 or RP2350 wired to the Tiny Tapeout demo board's PMOD
 |---|---|
 | `pico_harness/xc_model.hpp` | Golden model: a header-only C++ port of `<source_root>/formal/spec/xcordic_spec.vh`, GUARD 0 and 4 |
 | `pico_harness/src/pio_spi_prog.hpp` | Generates the PIO SPI master program for an SCLK, a mode and a MISO sample delay |
-| `pico_harnesssrc/hal.hpp`, `pico_harnesssrc/pico_hal.*` | Board layer: PIO or SPI-block master, CS/PROTO/CPHA/DATA_READY/BUSY pins |
+| `pico_harness/src/hal.hpp`, `pico_harness/src/pico_hal.*` | Board layer: PIO or SPI-block master, CS/PROTO/CPHA/DATA_READY/BUSY pins |
 | `pico_harness/src/xc_dut.hpp` | The chip's protocols (command frames, legacy frames, cfg, GUARD detection) |
 | `pico_harness/src/suites.*` | The tests (portable: they run on the Pico and in `sim/`) |
 | `pico_harness/src/main.cpp` | USB-serial console |

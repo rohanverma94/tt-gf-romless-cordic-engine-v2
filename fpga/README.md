@@ -91,7 +91,7 @@ Send `94 19 00 00 00 78 56 34 12` (self-test, N = 25, seed 0x12345678) over any 
 `test/tb_spi.v` is the testbench these bitstreams were checked against:
 
 ```sh
-NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/xc_frame.v src/xc_bist.v src/xc_exact.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v"
+NEW="src/project.v src/xc_spi_slave.v src/xc_spi_slave_sclk.v src/xc_meta.v src/xc_frame.v src/xc_bist.v src/xc_exact.v src/xcordic_core.v src/xcordic_engine.v src/xcordic_atan.v src/xc_add.v"
 iverilog -g2012 -DG=4 -o tb test/tb_spi.v $NEW && vvp -n tb +TH=40 +TL=43 +MULTI=1
 ```
 

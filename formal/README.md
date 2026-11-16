@@ -2,6 +2,8 @@
 
 Formal verification of `tt_um_xcordic` (`src/`) and of the original ttsky25a design it replaces (`third_party/ttsky_orig/`).
 
+Unzip `formal/results.zip`. That should place the results in `formal/results`.
+
 The full timing tables, the list of bugs found and the mutation table are in [`docs/FORMAL.md`](../docs/FORMAL.md). The pad-level I/O model is in [`docs/GF26C_IO.md`](../docs/GF26C_IO.md).
 
 ## Result Summary
