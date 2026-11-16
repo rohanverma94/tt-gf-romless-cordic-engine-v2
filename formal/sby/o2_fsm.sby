@@ -1,0 +1,33 @@
+# O2: the original cordic_fsm frame protocol, SPI slave and CORDIC as contracts
+#  proto: the master follows the documented protocol (every transaction; the FSM returns to its reset state)
+#  recover: any frames first, then CS high for 16 cycles, then the protocol
+#  cover: a protocol transaction completes
+[tasks]
+proto
+recover
+cover
+
+[options]
+proto: mode prove
+recover: mode prove
+cover: mode cover
+cover: depth 160
+
+[engines]
+proto: abc pdr
+recover: abc pdr
+cover: smtbmc yices
+
+[script]
+read -define CORDIC_MAXLAT=20 O2_TXNS=1 O2_QUIET=16
+recover: read -define O2_FREE
+read -formal spi_slave_contract.v cordic_top_contract.v
+read -formal top_fsm_o2.v
+prep -top cordic_fsm
+setundef -zero
+
+[files]
+../models/spi_slave_contract.v
+../models/cordic_top_contract.v
+../build/gen/top_fsm_o2.v
+../props/o2_fsm_props.vh
