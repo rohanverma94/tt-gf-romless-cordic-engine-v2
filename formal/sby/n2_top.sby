@@ -1,0 +1,63 @@
+# N2: the new frame FSM (xc_frame) with SPI and core contracts
+#  legacy_g*:  legacy protocol followed (any number of transactions, any framing)
+#  recover_g*: anything, then quiet for the timeout, then the legacy protocol
+#  cmd_g*:     command protocol under any frames
+#  switch_g4:  the PROTO pin free: no frame of one protocol is acted on by the other
+#  cov_*:      reachability
+[tasks]
+legacy_g0 legacy g0
+legacy_g4 legacy g4
+recover_g4 recover g4
+cmd_g0 cmd g0
+cmd_g4 cmd g4
+cov_legacy cov_l g4
+cov_cmd cov_c g4
+switch_g4 switch g4
+cov_switch cov_s g4
+
+[options]
+legacy: mode prove
+recover: mode prove
+cmd: mode prove
+switch: mode prove
+cov_l: mode cover
+cov_l: depth 90
+cov_c: mode cover
+cov_c: depth 90
+cov_s: mode cover
+cov_s: depth 120
+
+[engines]
+legacy: abc pdr
+recover: abc pdr
+cmd: abc pdr
+switch: abc pdr
+cov_l: smtbmc yices
+cov_c: smtbmc yices
+cov_s: smtbmc yices
+
+[script]
+g0: read -define N2_GUARD=0
+g4: read -define N2_GUARD=4
+legacy: read -define N2_LEGACY
+recover: read -define N2_LEGACY N2_FREE
+cmd: read -define N2_CMD
+switch: read -define N2_SWITCH
+cov_s: read -define N2_SWITCH
+cov_l: read -define N2_LEGACY
+cov_c: read -define N2_CMD
+legacy: read -define XC_CORE_MAX_LAT=6
+recover: read -define XC_CORE_MAX_LAT=6
+cov_l: read -define XC_CORE_MAX_LAT=6
+cov_s: read -define XC_CORE_MAX_LAT=6
+read -formal -D XC_FV_FRAME xc_frame.v
+read -formal xcordic_core_abstract.v
+read -formal -sv fv_n2_top.sv
+prep -top fv_n2_top
+setundef -zero
+
+[files]
+../../src/xc_frame.v
+../props/xc_frame_props.vh
+../models/xcordic_core_abstract.v
+../tb/fv_n2_top.sv
