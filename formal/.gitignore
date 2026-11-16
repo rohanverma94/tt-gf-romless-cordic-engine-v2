@@ -1,0 +1,6 @@
+# outputs of formal/run.sh, mutate.sh and the Verilator checks
+build/
+sby/*_*/
+sby/*/status.sqlite
+equiv/build_g*/
+exhaustive/build/
